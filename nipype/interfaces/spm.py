@@ -17,39 +17,85 @@ these functions include
 """
 __docformat__ = 'restructuredtext'
 
+# Standard library imports
+import os
+from glob import glob
+from copy import deepcopy
+import re
+
+# Third-party imports
+import numpy as np
+from scipy.io import savemat
+from scipy.signal import convolve
+from scipy.special import gammaln
+#from scipy.stats.distributions import gamma
+
+# Local imports
 from nipype.interfaces.base import Bunch, InterfaceResult, Interface
 from nipype.utils import setattr_on_read
 from nipype.externals.pynifti import load
 from nipype.interfaces.matlab import fltcols, MatlabCommandLine
-from nipype.utils.filemanip import fname_presuffix, fnames_presuffix, filename_to_list, list_to_filename
-from scipy.io import savemat
-from glob import glob
-from copy import deepcopy
-import numpy as np
-import os
-from nipype.utils import InTemporaryDirectory
+from nipype.utils.filemanip import (fname_presuffix, fnames_presuffix, 
+                                    filename_to_list, list_to_filename)
+
+def scans_for_fname(fname):
+    """Reads a nifti file and converts it to a numpy array storing
+    individual nifti volumes
+
+    >>> scans_for_fname('mynifti.nii')
+    """
+    img = load(fname)
+    if len(img.get_shape()) == 3:
+        flist = [['%s,1'%fname]]
+        return np.array([flist],dtype=object)
+    else:
+        n_scans = img.get_shape()[3]
+        scans = []
+        for sno in range(n_scans):
+            scans.insert(sno,['%s,%d'% (fname, sno+1)])
+        return np.array([scans],dtype=object)
+
+def scans_for_fnames(fnames,keep4d=False):
+    """Converts a list of files to a concatenated numpy array for each
+    volume.
+
+    keep4d : boolean
+        keeps the entries of the numpy array as 4d files instead of
+        extracting the individual volumes.
+    """
+    if keep4d:
+        flist = [[f] for f in fnames]
+        return np.array([flist],dtype=object)
+    else:
+        n_sess = len(fnames)
+        scans = None
+        for sess in range(n_sess):
+            if scans is None:
+                scans = scans_for_fname(fnames[sess])[0]
+            else:
+                scans = np.concatenate((scans,scans_for_fname(fnames[sess])[0]))
+        return np.array([scans],dtype=object)
 
 class SpmInfo(object):
     """ Return the path to the spm directory in the matlab path
-    >>> print spm.spmInfo()
+    >>> print spm.spmInfo().spm_path
     """
     @setattr_on_read
     def spm_path(self):
-        InTemporaryDirectory()
         mlab = MatlabCommandLine()
         mlab.inputs.script_name = 'spminfo'
         mlab.inputs.script_lines = """
 spm_path = spm('dir');
-fid = fopen('spm_path.txt', 'wt');
-fprintf(fid, '%s', spm_path);
-fclose(fid);
+fprintf(1, '<PATH>%s</PATH>', spm_path);
 """
+        mlab._compile_command(mfile=False)
         out = mlab.run()
         if out.runtime.returncode == 0:
-            spm_path = file('spm_path.txt', 'rt').read()
-            return spm_path
-        else:
-            return None
+            path = re.match('<PATH>(.*)</PATH>',out.runtime.stdout[out.runtime.stdout.find('<PATH>'):])
+            if path is not None:
+                path = path.groups()[0]
+            return path
+        return None
 
 spm_info = SpmInfo()
 
@@ -58,7 +104,13 @@ class SpmMatlabCommandLine(MatlabCommandLine):
     formatting of matlab scripts.
     """
 
-    def run(self, mfile=True):
+    mfile=True
+    def gen_mfile(self, use_mfile):
+        """reset the base matlab command
+        """
+        self.mfile = use_mfile
+
+    def run(self):
         """Executes the SPM function using MATLAB
 
         Redefines the run function of the baseclass to handle
@@ -72,7 +124,7 @@ class SpmMatlabCommandLine(MatlabCommandLine):
             MAT file is created. 
         
         """
-        self._compile_command(mfile)
+        self._compile_command()
         results = self._runner() 
         if 'MatlabScriptException' in results.runtime.stderr: 
             results.runtime.returncode = 1 
@@ -121,7 +173,7 @@ class SpmMatlabCommandLine(MatlabCommandLine):
 
             return [newdict]
 
-    def generate_job(self,prefix='',contents=None):
+    def generate_job(self, prefix='', contents=None):
         """ Recursive function to generate spm job specification as a string
 
         Parameters
@@ -138,13 +190,13 @@ class SpmMatlabCommandLine(MatlabCommandLine):
             return jobstring
         if type(contents) == type([]):
             for i,value in enumerate(contents):
-                newprefix = "%s(%d)" % (prefix,i+1)
-                jobstring += self.generate_job(newprefix,value)
+                newprefix = "%s(%d)" % (prefix, i+1)
+                jobstring += self.generate_job(newprefix, value)
             return jobstring
         if type(contents) == type({}):
             for key,value in contents.items():
-                newprefix = "%s.%s" % (prefix,key)
-                jobstring += self.generate_job(newprefix,value)
+                newprefix = "%s.%s" % (prefix, key)
+                jobstring += self.generate_job(newprefix, value)
             return jobstring
         if type(contents) == type(np.empty(1)):
             #Assumes list of filenames embedded in a numpy array
@@ -170,8 +222,7 @@ class SpmMatlabCommandLine(MatlabCommandLine):
         jobstring += "%s = %s;\n" % (prefix,str(contents))
         return jobstring
     
-    def make_matlab_command(self, jobtype, jobname, contents,
-            mfile=True, cwd=None):
+    def make_matlab_command(self, jobtype, jobname, contents, cwd=None):
         """ generates a mfile to build job structure
         Arguments
         ---------
@@ -185,44 +236,23 @@ class SpmMatlabCommandLine(MatlabCommandLine):
 
         mscript = '% generated by nipype.interfaces.spm\n'
         mscript += "spm_defaults;\n\n"
-        if mfile:
+        if self.mfile:
             if jobname in ['smooth','preproc','fmri_spec','fmri_est'] :
-                mscript += self.generate_job('jobs{1}.%s{1}.%s(1)' % (jobtype,jobname) ,contents[0])
+                mscript += self.generate_job('jobs{1}.%s{1}.%s(1)' % 
+                                             (jobtype,jobname), contents[0])
             else:
-                mscript += self.generate_job('jobs{1}.%s{1}.%s{1}' % (jobtype,jobname) ,contents[0])
+                mscript += self.generate_job('jobs{1}.%s{1}.%s{1}' % 
+                                             (jobtype,jobname), contents[0])
         else:
-            jobdef = {'jobs':[{jobtype:[{jobname:self.reformat_dict_for_savemat(contents[0])}]}]}
+            jobdef = {'jobs':[{jobtype:[{jobname:self.reformat_dict_for_savemat
+                                         (contents[0])}]}]}
             savemat(os.path.join(cwd,'pyjobs_%s.mat'%jobname), jobdef)
             mscript = "load pyjobs_%s;\n spm_jobman('run', jobs);\n" % jobname
         mscript += 'spm_jobman(\'run\',jobs);'
-        cmdline = self.gen_matlab_command(mscript,cwd=cwd,script_name='pyscript_%s'%jobname) 
+        cmdline = self.gen_matlab_command(mscript, cwd=cwd, 
+                                          script_name='pyscript_%s' % jobname) 
         return cmdline, mscript
 
-def scans_for_fname(fname):
-    img = load(fname)
-    if len(img.get_shape()) == 3:
-        flist = [['%s,1'%fname]]
-        return np.array([flist],dtype=object)
-    else:
-        n_scans = img.get_shape()[3]
-        scans = []
-        for sno in range(n_scans):
-            scans.insert(sno,['%s,%d'% (fname, sno+1)])
-        return np.array([scans],dtype=object)
-
-def scans_for_fnames(fnames,keep4d=False):
-    if keep4d:
-        flist = [[f] for f in fnames]
-        return np.array([flist],dtype=object)
-    else:
-        n_sess = len(fnames)
-        scans = None
-        for sess in range(n_sess):
-            if scans is None:
-                scans = scans_for_fname(fnames[sess])[0]
-            else:
-                scans = np.concatenate((scans,scans_for_fname(fnames[sess])[0]))
-        return np.array([scans],dtype=object)
 
 class Realign(SpmMatlabCommandLine):
     """use spm_realign for estimating within modality rigid body alignment
@@ -442,7 +472,7 @@ class Realign(SpmMatlabCommandLine):
             """
         print self.outputs_help.__doc__
 
-    def _compile_command(self, mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
@@ -452,8 +482,7 @@ class Realign(SpmMatlabCommandLine):
         else:
             jobtype = 'estimate'
         self._cmdline, mscript = self.make_matlab_command('spatial', 'realign',
-                                        [{'%s'%(jobtype):self._parseinputs()}],
-                                        mfile)
+                                        [{'%s'%(jobtype):self._parseinputs()}])
 
     def aggregate_outputs(self):
         """ Initializes the output fields for this interface and then
@@ -688,7 +717,7 @@ class Coregister(SpmMatlabCommandLine):
                 outputs.coregistered_files.append(c_file[0])
         return outputs
         
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
@@ -699,8 +728,8 @@ class Coregister(SpmMatlabCommandLine):
             jobtype = 'estimate'
         self._cmdline, mscript =self.make_matlab_command('spatial',
                                        'coreg',
-                                       [{'%s'%(jobtype):self._parseinputs()}],
-                                       mfile)
+                                       [{'%s'%(jobtype):self._parseinputs()}])
+
         
 class Normalize(SpmMatlabCommandLine):
     """use spm_normalise for warping an image to a template
@@ -903,7 +932,7 @@ class Normalize(SpmMatlabCommandLine):
             print 'option %s not supported'%(opt)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
@@ -914,8 +943,7 @@ class Normalize(SpmMatlabCommandLine):
             jobtype = 'est'
         self._cmdline, mscript =self.make_matlab_command('spatial',
                                        'normalise',
-                                       [{'%s'%(jobtype):self._parseinputs()}],
-                                       mfile)
+                                       [{'%s'%(jobtype):self._parseinputs()}])
 
     def outputs_help(self):
         """
@@ -1211,15 +1239,14 @@ class Segment(SpmMatlabCommandLine):
             print 'option %s not supported'%(opt)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
         """
         self._cmdline, mscript =self.make_matlab_command('spatial',
                                                        'preproc',
-                                                       [self._parseinputs()],
-                                                       mfile)
+                                                       [self._parseinputs()])
 
     def outputs_help(self):
         """
@@ -1364,15 +1391,14 @@ class Smooth(SpmMatlabCommandLine):
             print 'option %s not supported'%(opt)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
         """
         self._cmdline, mscript =self.make_matlab_command('spatial',
                                                        'smooth',
-                                                       [self._parseinputs()],
-                                                       mfile)
+                                                       [self._parseinputs()])
 
     def outputs_help(self):
         """
@@ -1829,15 +1855,14 @@ class Level1Design(SpmMatlabCommandLine):
                 einputs['dir'] = np.array([[[str(self.inputs.get('cwd','.'))]]],dtype=object)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
         """
         self._cmdline, mscript =self.make_matlab_command('stats',
                                                        'fmri_spec',
-                                                       [self._parseinputs()],
-                                                       mfile)
+                                                       [self._parseinputs()])
 
     def outputs_help(self):
         """
@@ -1982,15 +2007,14 @@ class EstimateModel(SpmMatlabCommandLine):
             print 'option %s not supported'%(opt)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat
         """
         self._cmdline, mscript = self.make_matlab_command('stats',
                                                        'fmri_est',
-                                                       [self._parseinputs()],
-                                                       mfile)
+                                                       [self._parseinputs()])
     
     def outputs_help(self):
         """
@@ -2036,7 +2060,6 @@ class EstimateModel(SpmMatlabCommandLine):
         outputs.spm_mat_file = spm[0]
         return outputs
 
-
 class SpecifyModel(Interface):
     """Makes a model specification SPM specific
 
@@ -2048,7 +2071,6 @@ class SpecifyModel(Interface):
     see self.inputs_help() for a list of SpecifyModel.inputs attributes
     
     Attributes
-    ----------
     
     inputs : Bunch
     a (dictionary-like) bunch of options that can be passed to 
@@ -2057,7 +2079,6 @@ class SpecifyModel(Interface):
     string used to call matlab/spm via SpmMatlabCommandLine interface
 
     Options
-    -------
 
     To see optional arguments
     SpecifyModel().inputs_help()
@@ -2132,20 +2153,29 @@ class SpecifyModel(Interface):
             concatenate_runs : boolean
                 Allows concatenating all runs to look like a single
                 expermental session.
-            time_acquisition : float
-                Time in seconds to acquire a single image volume
             time_repetition : float
                 Time between the start of one volume to the start of
                 the next image volume. If a clustered acquisition is
                 used, then this should be the time between the start
                 of acquisition of one cluster to the start of
                 acquisition of the next cluster.
+
+            Sparse and clustered-sparse specific options
+            
+            time_acquisition : float
+                Time in seconds to acquire a single image volume
             volumes_in_cluster : int
                 If number of volumes in a cluster is greater than one,
-                then it is assumed that a sparse-clustered acquisition
-                is being assumed.
-            model_hrf_cluster : boolean
+                then a sparse-clustered acquisition is being assumed.
+            model_hrf : boolean
                 Whether to model hrf for sparse clustered analysis
+            stimuli_as_impulses : boolean
+                Whether to treat each stimulus to be impulse like. If
+                not, the stimuli are convolved with their respective
+                durations.
+            scan_onset : float
+                Start of scanning relative to onset of run in
+                secs. default = 0 
         """
         print self.inputs_help.__doc__
 
@@ -2160,9 +2190,12 @@ class SpecifyModel(Interface):
                             input_units=None,
                             output_units=None,
                             concatenate_runs=None,
-                            time_acquisition=None,
                             time_repetition=None,
-                            volumes_in_cluster=None)
+                            time_acquisition=None,
+                            volumes_in_cluster=None,
+                            model_hrf=None,
+                            stimuli_as_impulses=True,
+                            scan_onset=0.)
         
     def outputs_help(self):
         """
@@ -2176,13 +2209,19 @@ class SpecifyModel(Interface):
         """
         print self.outputs_help.__doc__
 
-#    def _calculate_scalefactor(self):
-    def _scaletimings(self,timelist):
-        if self.inputs.input_units==self.inputs.output_units:
+    def _scaletimings(self,timelist,input_units=None,output_units=None):
+        if input_units is None:
+            input_units = self.inputs.input_units
+        if output_units is None:
+            output_units = self.inputs.output_units
+        if input_units==output_units:
             self._scalefactor = 1.
-        if (self.inputs.input_units == 'scans') and (self.inputs.output_units == 'secs'):
-            self._scalefactor = self.inputs.time_repetition
-        if (self.inputs.input_units == 'secs') and (self.inputs.output_units == 'scans'):
+        if (input_units == 'scans') and (output_units == 'secs'):
+            if self.inputs.volumes_in_cluster > 1:
+                raise NotImplementedError("cannot scale timings if times are scans and acquisition is clustered")
+            else:
+                self._scalefactor = self.inputs.time_repetition
+        if (input_units == 'secs') and (output_units == 'scans'):
             self._scalefactor = 1./self.inputs.time_repetition
 
         if self._scalefactor > 1:
@@ -2192,44 +2231,193 @@ class SpecifyModel(Interface):
             
         return timelist
     
-    def _generate_clustered_design(self):
+    def _gcd(self,a,b):
+        """Returns the greates common divisor of two integers
+
+        uses Euclid's algorithm
+        """
+        while b > 0: a,b = b, a%b
+        return a
+
+    def _spm_hrf(self,RT,P=[],fMRI_T=16):
+        """ python implementation of spm_hrf
+        see spm_hrf for implementation details
+
+        % RT   - scan repeat time
+        % p    - parameters of the response function (two gamma
+        % functions)
+        % defaults  (seconds)
+        %	p(0) - delay of response (relative to onset)	   6
+        %	p(1) - delay of undershoot (relative to onset)    16
+        %	p(2) - dispersion of response			   1
+        %	p(3) - dispersion of undershoot			   1
+        %	p(4) - ratio of response to undershoot		   6
+        %	p(5) - onset (seconds)				   0
+        %	p(6) - length of kernel (seconds)		  32
+        %
+        % hrf  - hemodynamic response function
+        % p    - parameters of the response function
+
+        >>> _spm_hrf(2)
+        array([  0.00000000e+00,   8.65660810e-02,   3.74888236e-01,
+         3.84923382e-01,   2.16117316e-01,   7.68695653e-02,
+         1.62017720e-03,  -3.06078117e-02,  -3.73060781e-02,
+        -3.08373716e-02,  -2.05161334e-02,  -1.16441637e-02,
+        -5.82063147e-03,  -2.61854250e-03,  -1.07732374e-03,
+        -4.10443522e-04,  -1.46257507e-04])
+        """
+        p     = np.array([6,16,1,1,6,0,32],dtype=float)
+        if len(P)>0:
+            p[0:len(P)] = P
+
+        _spm_Gpdf = lambda x,h,l: np.exp(h*np.log(l)+(h-1)*np.log(x)-(l*x)-gammaln(h))
+        # modelled hemodynamic response function - {mixture of Gammas}
+        dt    = RT/float(fMRI_T)
+        u     = np.arange(0,int(p[6]/dt+1)) - p[5]/dt
+        # the following code using scipy.stats.distributions.gamma
+        # doesn't return the same result as the spm_Gpdf function
+        # hrf   = gamma.pdf(u,p[0]/p[2],scale=dt/p[2]) - gamma.pdf(u,p[1]/p[3],scale=dt/p[3])/p[4]
+        hrf   = _spm_Gpdf(u,p[0]/p[2],dt/p[2]) - _spm_Gpdf(u,p[1]/p[3],dt/p[3])/p[4]
+        idx   = np.arange(0,int((p[6]/RT)+1))*fMRI_T
+        hrf   = hrf[idx]
+        hrf   = hrf/np.sum(hrf)
+        return hrf
+        
+    def _gen_regress(self,i_onsets,i_durations,nscans,bplot=False):
+        """Generates a regressor for a sparse/clustered-sparse acquisition
+
+           see Ghosh et al. (2009) OHBM 2009
+        """
+        if bplot:
+            import matplotlib.pyplot as plt
+        TR = np.round(self.inputs.time_repetition*1000)  # in ms
+        if self.inputs.time_acquisition is None:
+            TA = TR # in ms
+        else:
+            TA = np.round(self.inputs.time_acquisition*1000) # in ms
+        nvol = self.inputs.volumes_in_cluster
+        SCANONSET = np.round(self.inputs.scan_onset*1000)
+        total_time = TR*(nscans-nvol)/nvol + TA*nvol + SCANONSET
+        SILENCE = TR-TA*nvol
+        dt = TA/10.;
+        durations  = np.round(np.array(i_durations)*1000)
+        if len(durations) == 1:
+            durations = durations*np.ones((len(i_onsets)))
+        onsets = np.round(np.array(i_onsets)*1000)
+        dttemp = self._gcd(TA,self._gcd(SILENCE,TR))
+        if dt < dttemp:
+            if dttemp % dt != 0:
+                dt = self._gcd(dttemp,dt)
+        if dt < 1:
+            raise Exception("Time multiple less than 1 ms")
+        print "Setting dt = %d ms\n" % dt
+        npts = int(total_time/dt)
+        times = np.arange(0,total_time,dt)*1e-3
+        timeline = np.zeros((npts))
+        timeline2 = np.zeros((npts))
+        hrf = self._spm_hrf(dt*1e-3)
+        for i,t in enumerate(onsets):
+            idx = int(t/dt)
+            timeline2[idx] = 1
+            if bplot:
+                plt.subplot(4,1,1)
+                plt.plot(times,timeline2)
+            if not self.inputs.stimuli_as_impulses:
+                if durations[i] == 0:
+                    durations[i] = TA*nvol
+                stimdur = np.ones((int(durations[i]/dt)))
+                timeline2 = convolve(timeline2,stimdur)[0:len(timeline2)]
+            timeline += timeline2
+            timeline2[:] = 0
+        if bplot:
+            plt.subplot(4,1,2)
+            plt.plot(times,timeline)
+        if self.inputs.model_hrf:
+            timeline = convolve(timeline,hrf)[0:len(timeline)]
+        if bplot:
+            plt.subplot(4,1,3)
+            plt.plot(times,timeline)
+        # sample timeline
+        timeline2 = np.zeros((npts))
+        reg = []
+        for i,trial in enumerate(np.arange(nscans)/nvol):
+            scanstart = int((SCANONSET + trial*TR + (i%nvol)*TA)/dt)
+            #print total_time/dt, SCANONSET, TR, TA, scanstart, trial, i%2, int(TA/dt)
+            scanidx = scanstart+np.arange(int(TA/dt))
+            timeline2[scanidx] = np.max(timeline)
+            reg.insert(i,np.mean(timeline[scanidx]))
+        if bplot:
+            plt.subplot(4,1,3)
+            plt.plot(times,timeline2)
+            plt.subplot(4,1,4)
+            plt.bar(np.arange(len(reg)),reg,width=0.5)
+        return reg
+
+    def _cond_to_regress(self,info,nscans):
+        reg = []
+        regnames = info.conditions
+        for i,c in enumerate(info.conditions):
+            reg.insert(i,self._gen_regress(self._scaletimings(info.onsets[i],output_units='secs'),
+                                           self._scaletimings(info.durations[i],output_units='secs'),
+                                           nscans))
+            # need to deal with temporal and parametric modulators
+        # for sparse-clustered acquisitions enter T1-effect regressors
+        nvol = self.inputs.volumes_in_cluster
+        if nvol > 1:
+            for i in range(nvol-1):
+                treg = np.zeros((nscans/nvol,nvol))
+                treg[:,i] = 1
+                reg.insert(len(reg),treg.ravel().tolist())
+        return reg,regnames
+    
+    def _generate_clustered_design(self,infolist):
         """
         """
-        pass
+        infoout = deepcopy(infolist)
+        for i,info in enumerate(infolist):
+            infoout[i].conditions = None
+            infoout[i].onsets = None
+            infoout[i].durations = None
+            if info.conditions is not None:
+                img = load(self.inputs.functional_runs[i])
+                nscans = img.get_shape()[3]
+                reg,regnames = self._cond_to_regress(info,nscans)
+                if infoout[i].regressors is None:
+                    infoout[i].regressors = []
+                    infoout[i].regressor_names = []
+                else:
+                    if infoout[i].regressor_names is None:
+                        infoout[i].regressor_names = ['R%d'%j for j in range(len(infoout[i].regressors))] 
+                for j,r in enumerate(reg):
+                    regidx = len(infoout[i].regressors)
+                    infoout[i].regressor_names.insert(regidx,regnames[j])
+                    infoout[i].regressors.insert(regidx,r)
+        return infoout
     
     def _generate_standard_design(self,infolist,
                                   functional_runs=None,
                                   realignment_parameters=None,
                                   outliers=None):
-        """
-        The multipart assignment in the for loop below is to ensure
-        compatibility with current scipy MAT objects. The
-        following pairs of operations return two different types of
-        numpy arrays.
-
-        >>> onsets = [[1,2,3],[2,3]]
-        >>> np.array([[[np.array(f)] for f in onsets]],dtype=object)
-        
-        >>> onsets = [[1,2,3],[1,2,3]]
-        >>> np.array([[[np.array(f)] for f in onsets]],dtype=object)
+        """ Generates a standard design matrix paradigm
         """
         sessinfo = []
         for i,info in enumerate(infolist):
             sessinfo.insert(i,dict(cond=[]))
-            for cid,cond in enumerate(info.conditions):
-                sessinfo[i]['cond'].insert(cid,dict())
-                sessinfo[i]['cond'][cid]['name']  = info.conditions[cid]
-                sessinfo[i]['cond'][cid]['onset'] = self._scaletimings(info.onsets[cid])
-                sessinfo[i]['cond'][cid]['duration'] = self._scaletimings(info.durations[cid])
-                if info.tmod is not None:
-                    sessinfo[i]['cond'][cid]['tmod'] = info.tmod[cid]
-                if (info.pmod is not None) and info.pmod.has_key(cid+1):
-                    sessinfo[i]['cond'][cid]['pmod'] = []
-                    for j in range(len(info.pmod[cid+1].name)):
-                        sessinfo[i]['cond'][cid]['pmod'].insert(j,dict())
-                    for key,data in info.pmod[cid+1].iteritems():
-                        for k,val in enumerate(data):
-                            sessinfo[i]['cond'][cid]['pmod'][k][key] = val
+            if info.conditions is not None:
+                for cid,cond in enumerate(info.conditions):
+                    sessinfo[i]['cond'].insert(cid,dict())
+                    sessinfo[i]['cond'][cid]['name']  = info.conditions[cid]
+                    sessinfo[i]['cond'][cid]['onset'] = self._scaletimings(info.onsets[cid])
+                    sessinfo[i]['cond'][cid]['duration'] = self._scaletimings(info.durations[cid])
+                    if info.tmod is not None:
+                        sessinfo[i]['cond'][cid]['tmod'] = info.tmod[cid]
+                    if (info.pmod is not None) and info.pmod.has_key(cid+1):
+                        sessinfo[i]['cond'][cid]['pmod'] = []
+                        for j in range(len(info.pmod[cid+1].name)):
+                            sessinfo[i]['cond'][cid]['pmod'].insert(j,dict())
+                        for key,data in info.pmod[cid+1].iteritems():
+                            for k,val in enumerate(data):
+                                sessinfo[i]['cond'][cid]['pmod'][k][key] = val
             sessinfo[i]['regress']= []
             if info.regressors is not None:
                 for j,r in enumerate(info.regressors):
@@ -2241,6 +2429,8 @@ class SpecifyModel(Interface):
                     sessinfo[i]['regress'][j]['val'] = info.regressors[j]
             if functional_runs is not None:
                 sessinfo[i]['scans'] = scans_for_fnames(filename_to_list(functional_runs[i]),keep4d=False)
+            else:
+                raise Exception("No functional data information provided for model")
         if realignment_parameters is not None:
             for i,rp in enumerate(realignment_parameters):
                 mc = realignment_parameters[i]
@@ -2249,6 +2439,22 @@ class SpecifyModel(Interface):
                     sessinfo[i]['regress'].insert(colidx,dict(name='',val=[]))
                     sessinfo[i]['regress'][colidx]['name'] = 'Realign%d'%(col+1)
                     sessinfo[i]['regress'][colidx]['val']  = mc[:,col].tolist()
+        if outliers is not None:
+            for i,out in enumerate(outliers):
+                numscans = sessinfo[i]['scans'][0].shape[0] 
+                for j,scanno in enumerate(out):
+                    if True:
+                        colidx = len(sessinfo[i]['regress'])
+                        sessinfo[i]['regress'].insert(colidx,dict(name='',val=[]))
+                        sessinfo[i]['regress'][colidx]['name'] = 'Outlier%d'%(j+1)
+                        sessinfo[i]['regress'][colidx]['val']  = np.zeros((1,numscans))[0].tolist()
+                        sessinfo[i]['regress'][colidx]['val'][int(scanno)] = 1
+                    else:
+                        cid = len(sessinfo[i]['cond'])
+                        sessinfo[i]['cond'].insert(cid,dict())
+                        sessinfo[i]['cond'][cid]['name'] = "O%d"%(j+1)
+                        sessinfo[i]['cond'][cid]['onset'] = self._scaletimings([scanno])
+                        sessinfo[i]['cond'][cid]['duration'] = [0]
         return sessinfo
     
     def _concatenate_info(self,infolist):
@@ -2261,26 +2467,27 @@ class SpecifyModel(Interface):
         infoout = infolist[0]
         for i,info in enumerate(infolist[1:]):
                 #info.[conditions,tmod] remain the same
-            for j,val in enumerate(info.onsets):
-                if self.inputs.input_units == 'secs':
-                    infoout.onsets[j].extend((np.array(info.onsets[j])+
-                                              self.inputs.time_repetition*sum(nscans[0:(i+1)])).tolist())
-                else:
-                    infoout.onsets[j].extend((np.array(info.onsets[j])+sum(nscans[0:(i+1)])).tolist())
-            for j,val in enumerate(info.durations):
-                if len(val) > 1:
-                    infoout.durations[j].extend(info.durations[j])
-            if info.pmod is not None:
-                for key,data in info.pmod.items():
-                    for j,v in enumerate(data.param):
-                        infoout.pmod[key].param[j].extend(v)
+            if info.onsets is not None:
+                for j,val in enumerate(info.onsets):
+                    if self.inputs.input_units == 'secs':
+                        infoout.onsets[j].extend((np.array(info.onsets[j])+
+                                                  self.inputs.time_repetition*sum(nscans[0:(i+1)])).tolist())
+                    else:
+                        infoout.onsets[j].extend((np.array(info.onsets[j])+sum(nscans[0:(i+1)])).tolist())
+                for j,val in enumerate(info.durations):
+                    if len(val) > 1:
+                        infoout.durations[j].extend(info.durations[j])
+                if info.pmod is not None:
+                    for key,data in info.pmod.items():
+                        for j,v in enumerate(data.param):
+                            infoout.pmod[key].param[j].extend(v)
             if info.regressors is not None:
                 #assumes same ordering of regressors across different
                 #runs and the same names for the regressors
                 for j,v in enumerate(info.regressors):
                     infoout.regressors[j].extend(info.regressors[j])
             #insert session regressors
-            if False:
+            if True:
                 if infoout.regressors is None:
                     infoout.regressors = []
                 onelist = np.zeros((1,sum(nscans)))
@@ -2293,25 +2500,39 @@ class SpecifyModel(Interface):
                 if infoout.tmod is not None:
                     infoout.tmod.insert(len(infoout.tmod),0)
             # insert outliers as new regressors
-        return [infoout]
+        return [infoout],nscans
     
     def _generate_design(self):
         infolist = self.inputs.subject_info_func(self.inputs.subject_id)
         if self.inputs.concatenate_runs:
-            infolist = self._concatenate_info(infolist)
+            infolist,nscans = self._concatenate_info(infolist)
             functional_runs = [self.inputs.functional_runs]
         else:
             functional_runs = self.inputs.functional_runs
+        realignment_parameters = []
         if self.inputs.realignment_parameters is not None:
-            realignment_parameters = []
-            realignment_parameters.insert(0,np.loadtxt(self.inputs.realignment_parameters[0]))
-            for rpf in self.inputs.realignment_parameters[1:]:
+            rpfiles = filename_to_list(self.inputs.realignment_parameters)
+            realignment_parameters.insert(0,np.loadtxt(rpfiles[0]))
+            for rpf in rpfiles[1:]:
                 mc = np.loadtxt(rpf)
                 if self.inputs.concatenate_runs:
                     realignment_parameters[0] = np.concatenate((realignment_parameters[0],mc))
                 else:
                     realignment_parameters.insert(len(realignment_parameters),mc)
-        outliers = self.inputs.outlier_files
+        outliers = []
+        if self.inputs.outlier_files is not None:
+            outfiles = filename_to_list(self.inputs.outlier_files)
+            outliers.insert(0,np.loadtxt(outfiles[0]))
+            for i,rpf in enumerate(outfiles[1:]):
+                out = np.loadtxt(rpf)
+                if self.inputs.concatenate_runs:
+                    if len(out)>0:
+                        outliers[0] = np.concatenate((outliers[0],
+                                                      (np.array(out)+sum(nscans[0:(i+1)])).tolist()))
+                else:
+                    outliers.insert(len(outliers),out)
+        if self.inputs.volumes_in_cluster is not None:
+            infolist = self._generate_clustered_design(infolist)
         sessinfo = self._generate_standard_design(infolist,
                                                   functional_runs=functional_runs,
                                                   realignment_parameters=realignment_parameters,
@@ -2396,7 +2617,7 @@ class EstimateContrast(SpmMatlabCommandLine):
     def _populate_inputs(self):
         """ Initializes the input fields of this interface.
         """
-        self.inputs = Bunch(spm_design_file=None,
+        self.inputs = Bunch(spm_mat_file=None,
                             contrasts=None,
                             beta_images=None,
                             residual_image=None,
@@ -2425,7 +2646,7 @@ class EstimateContrast(SpmMatlabCommandLine):
 
         [inputs.update({k:v}) for k, v in self.inputs.iteritems() if v is not None ]
         for opt in inputs:
-            if opt is 'spm_design_file':
+            if opt is 'spm_mat_file':
                 einputs['spmmat'] = np.array([[[str(inputs[opt])]]],dtype=object)
                 continue
             if opt is 'contrasts':
@@ -2443,7 +2664,7 @@ class EstimateContrast(SpmMatlabCommandLine):
             print 'option %s not supported'%(opt)
         return einputs
 
-    def _compile_command(self,mfile=True):
+    def _compile_command(self):
         """validates spm options and generates job structure
         if mfile is True uses matlab .m file
         else generates a job structure and saves in .mat

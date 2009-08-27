@@ -14,20 +14,20 @@ __docformat__ = 'restructuredtext'
 
 import os
 from glob import glob
-from nipype.interfaces.base import Bunch, CommandLine, InterfaceResult
+from nipype.interfaces.base import Bunch, CommandLine
 from nipype.utils.filemanip import fname_presuffix
-from nipype.utils import setattr_on_read
-from copy import deepcopy
 
 def freesurferversion():
     """Check for freesurfer version on system
 
     Parameters
     ----------
+    
     None
 
     Returns
     -------
+    
     version : string
        version number as string 
        or None if freesurfer version not found
@@ -51,11 +51,13 @@ def fssubjectsdir(subjects_dir=None):
     
     Parameters
     ----------
+    
     subjects_dir :  string
         The system defined subjects directory
 
     Returns
     -------
+    
     subject_dir : string
         Represents the current environment setting of SUBJECTS_DIR
 
@@ -67,7 +69,33 @@ def fssubjectsdir(subjects_dir=None):
     print 'SUBJECTS_DIR = %s'%subjects_dir
     return subjects_dir
 
-class Dicom2Nifti(CommandLine):
+class FSCommandLine(CommandLine):
+
+    def __init__(self):
+        super(FSCommandLine,self).__init__()
+        self._cmdline = ''
+        
+    @property
+    def cmdline(self):
+        # This handles args like ['bet', '-f 0.2'] without crashing
+        return self._cmdline
+
+    def run(self):
+        """Execute the command.
+        
+        Returns
+        -------
+        results : InterfaceResult
+            A `InterfaceResult` object with a copy of self in `interface`
+
+        """
+        # This is expected to populate `_cmdline` for _runner to work
+        self._compile_command()
+        result = self._runner(cwd=self.inputs.get('cwd','.'))
+        result.outputs = self.aggregate_outputs()
+        return result
+    
+class Dicom2Nifti(FSCommandLine):
     """use fs mri_convert to convert dicom files to nifti-1 files
 
     Options
@@ -92,9 +120,10 @@ class Dicom2Nifti(CommandLine):
 
 
     def inputs_help(self):
-        doc = """
-        Optional Parameters
-        -------------------
+        """
+        Parameters
+        ----------
+        
         (all default to None and are unset)
         
         dicomdir : /path/to/dicomfiles
@@ -116,7 +145,7 @@ class Dicom2Nifti(CommandLine):
         flags = unsupported flags, use at your own risk
 
         """
-        print doc
+        print self.inputs_help.__doc__
 
     def _populate_inputs(self):
         self.inputs = Bunch(dicomdir=None,
@@ -177,8 +206,8 @@ class Dicom2Nifti(CommandLine):
             if not os.path.exists(outfile):
                 single_cmd = '%s %s %s;' % (self.cmd, f, outfile)
                 cmd.extend([single_cmd])
-        self.cmdline =  ' '.join(cmd)
-        return self.cmdline,outdir
+        self._cmdline =  ' '.join(cmd)
+        return self._cmdline,outdir
 
     def aggregate_outputs(self):
         cmd,outdir = self._compile_command()
@@ -187,27 +216,9 @@ class Dicom2Nifti(CommandLine):
             for field,template in self.inputs.file_mapping:
                 outputs[field] = sorted(glob(os.path.join(outdir,template)))
         return outputs
-    
-    def run(self):
-        """Execute the command.
-        
-        Returns
-        -------
-        results : Bunch
-            A `Bunch` object with a copy of self in `interface`
-
-         """
-        # This is expected to populate `command` for _runner to work
-        self._compile_command()
-        returncode, out, err = self._runner(cwd='.')
-        return  InterfaceResult(runtime=Bunch(returncode=returncode,
-                                              messages=out,
-                                              errmessages=err),
-                                outputs = self.aggregate_outputs(),
-                                interface=deepcopy(self))
         
 
-class Resample(CommandLine):
+class Resample(FSCommandLine):
     """use fs mri_convert to up or down-sample image files
 
     Options
@@ -232,7 +243,7 @@ class Resample(CommandLine):
 
 
     def inputs_help(self):
-        doc = """
+        """
         Optional Parameters
         -------------------
         (all default to None and are unset)
@@ -247,7 +258,7 @@ class Resample(CommandLine):
         flags = unsupported flags, use at your own risk
 
         """
-        print doc
+        print self.inputs_help.__doc__
 
     def _populate_inputs(self):
         self.inputs = Bunch(infile=None,
@@ -279,11 +290,11 @@ class Resample(CommandLine):
         return out_inputs
 
     def outputs_help(self):
-        doc = """
+        """
         outfile : string or list
             resampled file(s)
         """
-        print doc
+        print self.outputs_help.__doc__
 
     def _compile_command(self):
         """validates fsl options and generates command line argument"""
@@ -297,8 +308,8 @@ class Resample(CommandLine):
             outfile[i] = os.path.abspath(os.path.join(self.inputs.get('cwd','.'),outfile[i]))
             single_cmd = '%s -vs %d %d %d %s %s;' % (self.cmd, vs[0],vs[1],vs[2], f, outfile[i])
             cmd.extend([single_cmd])
-        self.cmdline =  ' '.join(cmd)
-        return self.cmdline
+        self._cmdline =  ' '.join(cmd)
+        return self._cmdline
 
     def aggregate_outputs(self):
         outputs = Bunch(outfile=[])
@@ -312,31 +323,12 @@ class Resample(CommandLine):
             outputs.outfile = outputs.outfile[0]
         return outputs
         
-    def run(self):
-        """Execute the command.
-        
-        Returns
-        -------
-        results : InterfaceResult
-            A `InterfaceResult` object with a copy of self in `interface`
 
-        """
-        # This is expected to populate `cmdline` for _runner to work
-        self._compile_command()
-        returncode, out, err = self._runner(self.inputs.get('cwd','.'))
-        return  InterfaceResult(runtime=Bunch(returncode=returncode,
-                                              messages=out,
-                                              errmessages=err),
-                                outputs = outputs,
-                                interface=deepcopy(self))
-        
-
-class ReconAll(CommandLine):
+class ReconAll(FSCommandLine):
     """use fs recon-all to generate surfaces and parcellations of
     structural data from an anatomical image of a subject.
 
     Options
-    -------
 
     To see optianl arguments
     ReconAll().inputs_help()
@@ -344,6 +336,7 @@ class ReconAll(CommandLine):
 
     Examples
     --------
+    
     >>> reconall = freesurfer.ReconAll()
     >>> reconall.inputs.subject_id = 'foo'
     >>> reconall.inputs.directive  = '-all'
@@ -359,23 +352,23 @@ class ReconAll(CommandLine):
 
 
     def inputs_help(self):
-        doc = """
-        Mandatory Parameters
-        --------------------
+        """
+        Parameters
+        ----------
         (all default to None and are unset)
         subject_id: string or int
             Identifier for subject
         directive: string
             Which part of the process to run 
 
-            Fully-Automated Directive:
-            --------------------------
+            Fully-Automated Directive
+
 
             -all           : performs all stages of cortical reconstruction
             -autorecon-all : same as -all
 
-            Manual-Intervention Workflow Directives:
-            ----------------------------------------
+            Manual-Intervention Workflow Directives
+
 
             -autorecon1    : process stages 1-5 (see below)
             -autorecon2    : process stages 6-24
@@ -391,8 +384,8 @@ class ReconAll(CommandLine):
             -autorecon3    : process stages 25-31
 
 
-        Optional Parameters
-        -------------------
+        Parameters
+        ----------
         (all default to None and are unset)
              
         T1files: filename(s)
@@ -408,7 +401,7 @@ class ReconAll(CommandLine):
         flags:
             unsupported flags, use at your own risk
         """
-        print doc
+        print self.inputs_help.__doc__
 
     def _populate_inputs(self):
         self.inputs = Bunch(subject_id=None,
@@ -454,38 +447,22 @@ class ReconAll(CommandLine):
         return out_inputs
 
     def outputs_help(self):
-        doc = """
+        """
         No outputs
         """
-        print doc
+        print self.outputs_help.__doc__
 
     def _compile_command(self):
         """validates fsl options and generates command line argument"""
         valid_inputs = self._parseinputs()
         allargs =  [self.cmd] + valid_inputs
-        self.cmdline = ' '.join(allargs)
-        return self.cmdline
-
-    def run(self):
-        """Execute the command.
+        self._cmdline = ' '.join(allargs)
+        return self._cmdline
         
-        Returns
-        -------
-        results : InterfaceResult
-            A `InterfaceResult` object with a copy of self in `interface`
+    def aggregate_outputs(self):
+        return None
 
-        """
-        # This is expected to populate `cmdline` for _runner to work
-        self._compile_command()
-        returncode, out, err = self._runner(self.inputs.get('cwd','.'))
-        return  InterfaceResult(runtime=Bunch(returncode=returncode,
-                                              messages=out,
-                                              errmessages=err),
-                                outputs = None,
-                                interface=deepcopy(self))
-        
-
-class BBRegister(CommandLine):
+class BBRegister(FSCommandLine):
     """use fs bbregister to register a volume two a surface mesh
 
     This program performs within-subject, cross-modal registration using a
@@ -511,9 +488,10 @@ class BBRegister(CommandLine):
 
 
     def inputs_help(self):
-        doc = """
-        Mandatory Parameters
-        --------------------
+        """
+        Parameters
+        ----------
+        
         (all default to None and are unset)
         subject_id: string or int
             Identifier for subject
@@ -533,8 +511,9 @@ class BBRegister(CommandLine):
             --bold : same as --t2
             --dti  : same as --t2
 
-        Optional Parameters
-        -------------------
+        Parameters
+        ----------
+        
         (all default to None and are unset)
         outregfile: filename
             Name of output registration file. By default the extension
@@ -545,7 +524,7 @@ class BBRegister(CommandLine):
         flags:
             unsupported flags, use at your own risk
         """
-        print doc
+        print self.inputs_help.__doc__
 
     def _populate_inputs(self):
         self.inputs = Bunch(subject_id=None,
@@ -605,17 +584,17 @@ class BBRegister(CommandLine):
         """validates fsl options and generates command line argument"""
         valid_inputs = self._parseinputs()
         allargs =  [self.cmd] + valid_inputs
-        self.cmdline = ' '.join(allargs)
-        return self.cmdline
+        self._cmdline = ' '.join(allargs)
+        return self._cmdline
 
     def outputs_help(self):
-        doc = """
+        """
         outregfile: filename
             Output registration file
         outfile: filename
             Registered and resampled source file
         """
-        print doc
+        print self.outputs_help.__doc__
 
     def aggregate_outputs(self):
         outputs = Bunch(outregfile=None,
@@ -637,21 +616,4 @@ class BBRegister(CommandLine):
             assert len(outfile)==1, "No output file %s created"%outfile
             outputs.outfile = outfile[0]
     
-    def run(self):
-        """Execute the command.
-        
-        Returns
-        -------
-        results : InterfaceResult
-            A `InterfaceResult` object with a copy of self in `interface`
-
-        """
-        # This is expected to populate `cmdline` for _runner to work
-        self._compile_command()
-        returncode, out, err = self._runner(self.inputs.get('cwd','.'))
-        return  InterfaceResult(runtime=Bunch(returncode=returncode,
-                                              messages=out,
-                                              errmessages=err),
-                                outputs = self.aggregate_outputs(),
-                                interface=deepcopy(self))
         
