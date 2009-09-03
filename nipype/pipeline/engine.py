@@ -85,7 +85,21 @@ class Pipeline(object):
         - `connection_list`: A list of 3-tuples of the following form
         [(source1,destination1,[('namedoutput1','namedinput1'),...]),...]
         """
-        self.graph.add_edges_from(connection_list)
+        self.graph.add_edges_from([(u,v,{'connect':d}) for u,v,d in connection_list])
+        print "PE: checking connections:\n"
+        for u,v,d in connection_list:
+            for source,dest in d:
+                try:
+                    if v.inputs.__dict__.has_key(dest) is not True:
+                        print "Module %s has no input called %s\n"%(v.name,dest)
+                except:
+                    print "unable to query inputs of module %s\n"%v.name
+                try:
+                    if not source in u.interface.outputs_help.__doc__:
+                        print "Module %s has no output called %s\n"%(u.name,source)
+                except:
+                    print "unable to query outputs of module %s\n"%u.name
+        print "PE: finished checking connections\n"
 
     def addmodules(self,modules):
         """ Wraps the networkx functionality in a more semantically
@@ -101,7 +115,9 @@ class Pipeline(object):
     def showgraph(self,prog='dot'):
         """ Displays the graph layout of the pipeline
         """
-        nx.draw_graphviz(self.graph,prog=prog)
+        pos = nx.shell_layout(self.graph)
+        nx.draw(self.graph,pos)
+        #nx.draw_graphviz(self.graph,prog=prog)
 
     def generate_parameterized_graphs(self):
         """ Generates a new graph for each unique parameterization of
@@ -219,7 +235,7 @@ class Pipeline(object):
                 # edges connecting nodes
                 for edge in graph.in_edges_iter(node):
                     data = graph.get_edge_data(*edge)
-                    for sourcename,destname in data:
+                    for sourcename,destname in data['connect']:
                         node.set_input(destname,edge[0].get_output(sourcename))
                 print "Executing: %s H: %s" % (node.name, node.hash_inputs())
                 # For a disk node, provide it with an appropriate
@@ -351,7 +367,7 @@ class Pipeline(object):
         graph = self.listofgraphs[self.procs_graph_id[jobid]]
         for edge in graph.out_edges_iter(self.procs[jobid]):
             data = graph.get_edge_data(*edge)
-            for sourcename,destname in data:
+            for sourcename,destname in data['connect']:
                 edge[1].set_input(destname,self.procs[jobid].get_output(sourcename))
         # update the job dependency structure
         self.depidx[jobid,:] = False
