@@ -551,7 +551,7 @@ class Fast(FSLCommand):
     def _parse_inputs(self):
         '''Call our super-method, then add our input files'''
         # Could do other checking above and beyond regular _parse_inputs here
-        allargs = super(Fast, self)._parse_inputs())
+        allargs = super(Fast, self)._parse_inputs()
         allargs.extend(self.inputs.infiles)
 
         return allargs
