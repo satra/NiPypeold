@@ -57,7 +57,7 @@ from types import (
     ListType, TupleType
 )
 
-from IPython.utils.importstring import import_item
+from nipype.externals.importstring import import_item
 
 ClassTypes = (ClassType, type)
 

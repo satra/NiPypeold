@@ -32,11 +32,15 @@ from nipype.utils import setattr_on_read
 from nipype.utils.docparse import get_doc
 from nipype.utils.misc import container_to_string, is_container
 
+# We are shooting for interoperability for now - Traits or Traitlets
+import nipype.externals.traitlets as traits
+HasTraits = traits.HasTraitlets
+
 warn = warnings.warn
 warnings.filterwarnings('always', category=UserWarning)
 
 class FSLInfo(object):
-    '''A class to encapsulate stuff we'll need throughout the 
+    '''A class to encapsulate stuff we'll need throughout the use of FSL
     
     This should probably be a singleton class? or do we want to make it
     possible to wrap a few versions of FSL? In any case, currently we
@@ -187,15 +191,6 @@ class FSLInfo(object):
     
 fsl_info = FSLInfo()
 
-# Legacy to support old code. Should be deleted soon. before 0.2?
-def fslversion():
-    warn(DeprecationWarning('fslversion should be accessed via fsl_info'))
-    return(fsl_info.version)
-
-def fsloutputtype(ftype=None):
-    warn(DeprecationWarning('fsloutputtype should be accessed via fsl_info'))
-    return fsl_info.outputtype(ftype)
-
 class FSLCommand(CommandLine):
     '''General support for FSL commands'''
     opt_map = {}
@@ -309,7 +304,17 @@ class FSLCommand(CommandLine):
         raise NotImplementedError(
                 'Subclasses of FSLCommand must implement outputs')
 
-class Bet(FSLCommand):
+class TraitedCommand(CommandLine):
+    '''Provides machinery for providing input and output specifications
+
+    As much as possible, actual functional logic should be housed in this class,
+    subclasses should primarily specify their inputs, outputs and other
+    command-line relevant properties in a declarative fashion.'''
+    def __init__(self, **kwargs):
+        super(TraitedCommand, self).__init__()
+        self.inputs = input_spec(**kwargs)
+
+class Bet(TraitedCommand):
     """Use FSL BET command for skull stripping.
 
     For complete details, see the `BET Documentation. 
@@ -354,25 +359,32 @@ class Bet(FSLCommand):
         """sets base command, immutable"""
         return 'bet'
 
-    opt_map = {
-        'outline':            '-o',
-        'mask':               '-m',
-        'skull':              '-s',
-        'nooutput':           '-n',
-        'frac':               '-f %.2f',
-        'vertical_gradient':  '-g %.2f',
-        'radius':             '-r %d', # in mm
-        'center':             '-c %d %d %d', # in voxels
-        'threshold':          '-t',
-        'mesh':               '-e',
-        'verbose':            '-v',
-        'functional':         '-F',
-        'flags':              '%s',
-        'reduce_bias':        '-B',
-        'infile':             None,
-        'outfile':            None,
-        }
-    # Currently we don't support -R, -S, -Z,-A or -A2
+    class input_spec(HasTraits):
+        '''Note: Currently we don't support -R, -S, -Z,-A or -A2'''
+        # We use position args here as list indices - so a negative number will
+        # put something on the end
+        # Also, it would be nice to use traits.File types here, but Traitlets
+        # doesn't support that (Yet)
+        infile = traits.Str(position=0, mandatory=True)
+        outfile = traits.Str(position=1, mandatory=True)
+        outline = traits.Bool(flag='-o')
+        mask = traits.Bool(flag='-m')
+        skull = traits.Bool(flag='-s')
+        nooutput = traits.Bool(flag='-n')
+        frac = traits.Float(flag='-f %.2f')
+        vertical_gradient = traits.Float(flag='-g %.2f')
+        radius = traits.Int(flag='-r %d', units='mm')
+        # Note - Traitlets doesn't actually support the 'trait' metadata, so it
+        # is just plain ol' metadata. But we use the same 'trait' id here for
+        # consistency with the Traits API. Likewise for minlen and maxlen.
+        center = traits.List('-c %d %d %d', trait=traits.Int, minlen=3,
+                             maxlen=3, units='voxels')
+        threshold = traits.Bool(flag='-t')
+        mesh = traits.Bool(flag='-e')
+        verbose = traits.Bool(flag='-v')
+        functional = traits.Bool(flag='-F')
+        flags = traits.Bool(flag='%s')
+        reduce_bias = traits.Bool(flag='-B')
 
     def inputs_help(self):
         """Print command line documentation for Bet."""
