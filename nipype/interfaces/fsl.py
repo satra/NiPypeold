@@ -311,6 +311,13 @@ class TraitedCommand(CommandLine):
     As much as possible, actual functional logic should be housed in this class,
     subclasses should primarily specify their inputs, outputs and other
     command-line relevant properties in a declarative fashion.'''
+    @property
+    def cmdline(self):
+        """validates fsl options and generates command line argument"""
+        allargs = self._parse_inputs()
+        allargs.insert(0, self.cmd)
+        return ' '.join(allargs)
+
     def __init__(self, **kwargs):
         super(TraitedCommand, self).__init__()
         self.inputs = self.input_spec(**kwargs)
@@ -328,6 +335,111 @@ class TraitedCommand(CommandLine):
             maskfile : string, file
         """
         return self.output_spec()
+
+
+    def run(self, cwd=None):
+        """Execute the command.
+
+        Returns
+        -------
+        results : InterfaceResult
+            An :class:`nipype.interfaces.base.InterfaceResult` object
+            with a copy of self in `interface`
+
+        """
+        results = self._runner(cwd=cwd)
+        if results.runtime.returncode == 0:
+            results.outputs = self.aggregate_outputs()
+
+        return results
+
+    def _parse_inputs(self):
+        """Parse all inputs and format options using the opt_map format string.
+
+        Any inputs that are assigned (that are not None) are formatted
+        to be added to the command line.
+
+        Parameters
+        ----------
+        skip : tuple or list
+            Inputs to skip in the parsing.  This is for inputs that
+            require special handling, for example input files that
+            often must be at the end of the command line.  Inputs that
+            require special handling like this should be handled in a
+            _parse_inputs method in the subclass.
+
+        Returns
+        -------
+        allargs : list
+            A list of all inputs formatted for the command line.
+
+        """
+        allargs = []
+        # XXX Given the current implementation, we can't maintain compatability
+        # with Traits as well (easily)
+        inputs = sorted((k, v) for k, v in self.inputs.traitlets().iteritems())
+                            # if v is not None and k not in skip)
+        for opt, value in inputs:
+            if opt == 'args':
+                # XXX Where is this used?  Is self.inputs.args still
+                # used?  Or is it leftover from the original design of
+                # base.CommandLine?
+                allargs.extend(value)
+                continue
+            try:
+                argstr = self.opt_map[opt]
+                if argstr.find('%') == -1:
+                    # Boolean options have no format string. Just append options
+                    # if True.
+                    if value is True:
+                        allargs.append(argstr)
+                    elif value is not False:
+                        raise TypeError('Boolean option %s set to %s' %
+                                         (opt, str(value)) )
+                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
+                    # XXX Hack to deal with special case where some
+                    # parameters to Fnirt can have a variable number
+                    # of arguments.  Splitting the argument string,
+                    # like '--infwhm=%d', then add as many format
+                    # strings as there are values to the right-hand
+                    # side.
+                    argparts = argstr.split('=')
+                    allargs.append(argparts[0] + '=' +
+                                   ','.join([argparts[1] % y for y in value]))
+                elif isinstance(value, list):
+                    allargs.append(argstr % tuple(value))
+                else:
+                    # Append options using format string.
+                    allargs.append(argstr % value)
+            except TypeError, err:
+                msg = 'Error when parsing option %s in class %s.\n%s' % \
+                    (opt, self.__class__.__name__, err.message)
+                warn(msg)
+            except KeyError:
+                warn("Option '%s' is not supported!" % (opt))
+
+        return allargs
+
+    def _populate_inputs(self):
+        self.inputs = Bunch((k,None) for k in self.opt_map.keys())
+
+    def inputs_help(self):
+        """Print command line documentation for the command."""
+        print get_doc(self.cmd, self.opt_map, '-h')
+
+    def aggregate_outputs(self):
+        raise NotImplementedError(
+                'Subclasses of FSLCommand must implement aggregate_outputs')
+
+    def outputs_help(self):
+        """Print outputs help
+        """
+        print self.outputs.__doc__
+
+    def outputs(self):
+        """Virtual function"""
+        raise NotImplementedError(
+                'Subclasses of FSLCommand must implement outputs')
 
 class Bet(TraitedCommand):
     """Use FSL BET command for skull stripping.
@@ -392,7 +504,8 @@ class Bet(TraitedCommand):
         # Note - Traitlets doesn't actually support the 'trait' metadata, so it
         # is just plain ol' metadata. But we use the same 'trait' id here for
         # consistency with the Traits API. Likewise for minlen and maxlen.
-        center = traits.List('-c %d %d %d', trait=traits.Int, minlen=3,
+        # XXX Currently, default_value won't work for a List
+        center = traits.List(flag='-c %d %d %d', trait=traits.Int, minlen=3,
                              maxlen=3, units='voxels')
         threshold = traits.Bool(flag='-t')
         mesh = traits.Bool(flag='-e')
@@ -564,9 +677,10 @@ class Fast(FSLCommand):
         #            title='Inputs for FAST',
         #        )
 
-        infiles = traits.List(traits.File, 
-                             editor=tui.ListEditor(rows=3, style='custom',
-                             ui_kind='subpanel'), #auto_add=True),
+        infiles = traits.List(# again, traits.File would be nice
+            trait=traits.Str, 
+            # editor=tui.ListEditor(rows=3, style='custom',
+            # ui_kind='subpanel'), #auto_add=True),
             desc="files to run on ['/path/to/afile', /path/to/anotherfile']")
         number_classes = traits.Int(flag='--class %d ',
             desc='number of tissue-type classes, (default=3)')
@@ -590,9 +704,10 @@ class Fast(FSLCommand):
         # I'm not sure if there are supposed to be exactly 3 args or what
         # May want to use a Tuple or a List Trait depending on how this is supposed
         # to be
-        other_priors = traits.Tuple('', '', '',  # should be fnames
-            flag='-A %s %s %s',
-            desc="<prior1> <prior2> <prior3>    alternative prior images")
+        # XXX currently commented while figuring out what to do about this Tuple
+        # other_priors = traits.Tuple('', '', '',  # should be fnames
+        #     flag='-A %s %s %s',
+        #     desc="<prior1> <prior2> <prior3>    alternative prior images")
         nopve = traits.Bool(flag='--nopve',
             desc='turn off PVE (partial volume estimation)')
         output_biasfield = traits.Bool(flag='-b',
@@ -623,8 +738,8 @@ class Fast(FSLCommand):
             desc='Filename containing intensities')
         probability_maps = traits.Bool(flag='-p',
             desc='outputs individual probability maps')
-        args = traits.ListStr(
-            desc="unsupported flags, use at your own risk  ['-R']")
+        # args = traits.ListStr(
+        #     desc="unsupported flags, use at your own risk  ['-R']")
 
     opt_map = {'number_classes':       '-n %d',
             'bias_iters':           '-I %d',
