@@ -194,13 +194,13 @@ class Dicom2Nifti(FSCommandLine):
         """validates fsl options and generates command line argument"""
         valid_inputs = self._parseinputs()
         subjid = self.inputs.subject_id
-        if subjid is None:
+        if not subjid:
             path,fname = os.path.split(valid_inputs['dicomfiles'][0])
             subjid = fname.split('-')[0]
-        if self.inputs.subject_dir_template is not None:
+        if self.inputs.subject_dir_template:
             subjid  = self.inputs.subject_dir_template % subjid
         basedir=self.inputs.base_output_dir
-        if basedir is None:
+        if not basedir:
             basedir = os.path.abspath('.')
         outdir = os.path.abspath(os.path.join(basedir,subjid))
         cmd = []
@@ -219,14 +219,17 @@ class Dicom2Nifti(FSCommandLine):
         self._cmdline =  ' '.join(cmd)
         return self._cmdline,outdir
 
+    def outputs(self):
+        return Bunch()
+
     def aggregate_outputs(self):
         cmd,outdir = self._compile_command()
-        outputs = Bunch()
-        if self.inputs.file_mapping is not None:
+        outputs = self.outputs()
+        if self.inputs.file_mapping:
             for field,template in self.inputs.file_mapping:
-                outputs[field] = sorted(glob(os.path.join(outdir,template)))
+                setattr(outputs, field, sorted(glob(os.path.join(outdir,
+                                                                 template))))
         return outputs
-        
 
 class Resample(FSLCommand):
     """Use FreeSurfer mri_convert to up or down-sample image files
