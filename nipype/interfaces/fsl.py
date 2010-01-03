@@ -313,7 +313,21 @@ class TraitedCommand(CommandLine):
     command-line relevant properties in a declarative fashion.'''
     def __init__(self, **kwargs):
         super(TraitedCommand, self).__init__()
-        self.inputs = input_spec(**kwargs)
+        self.inputs = self.input_spec(**kwargs)
+
+    # XXX: I don't think this is necessary in light of output_spec, raise with
+    # group once feature-identical implementation is finished
+    def outputs(self):
+        """Returns a bunch structure with outputs
+
+        Parameters
+        ----------
+        (all default to None and are unset)
+
+            outfile : string,file
+            maskfile : string, file
+        """
+        return self.output_spec()
 
 class Bet(TraitedCommand):
     """Use FSL BET command for skull stripping.
@@ -387,6 +401,13 @@ class Bet(TraitedCommand):
         flags = traits.Bool(flag='%s')
         reduce_bias = traits.Bool(flag='-B')
 
+    class output_spec(HasTraits):
+        # Note - desc has special meaning in Traits, similar to __doc__
+        outfile = traits.Str(desc="path/name of skullstripped file")
+        maskfile = traits.Str(
+                        desc="path/name of binary brain mask (if generated)")
+                
+
     def inputs_help(self):
         """Print command line documentation for Bet."""
         print get_doc(self.cmd, self.opt_map, trap_error=False)
@@ -397,7 +418,8 @@ class Bet(TraitedCommand):
 
         if self.inputs.infile:
             # TODO: This should not be here but since _parse_inputs is called by
-            # the logger through cmdline before run it needs to be included twice
+            # the logger through cmdline before run it needs to be included
+            # twice
             self.inputs.infile = list_to_filename(self.inputs.infile)
 
             allargs.insert(0, self.inputs.infile)
@@ -461,20 +483,6 @@ class Bet(TraitedCommand):
             results.outputs = self.aggregate_outputs(cwd)
         return results
 
-    def outputs(self):
-        """Returns a bunch structure with outputs
-
-        Parameters
-        ----------
-        (all default to None and are unset)
-
-            outfile : string,file
-                path/name of skullstripped file
-            maskfile : string, file
-                binary brain mask if generated
-        """
-        outputs = Bunch(outfile=None,maskfile=None)
-        return outputs
 
     def aggregate_outputs(self, cwd=None):
         """Create a Bunch which contains all possible files generated
@@ -530,6 +538,93 @@ class Fast(FSLCommand):
     def cmd(self):
         """sets base command, not editable"""
         return 'fast'
+
+    class input_spec(HasTraits):
+        # The following is an example of how we might structure an editable view
+        # in real Traits. tui = traits.ui.api
+        # You might play with it like this:
+        # fastin = Fast.input_spec()
+        # fastin.configure_traits()
+        # print fastin.get()
+        # '*' is no good here :(
+        # view = tui.View(
+        #            # tui.Group(
+        #            # tui.Group(
+        #                tui.Label('Required Inputs'),
+        #                tui.Item('inputs', editor=tui.ListStrEditor(auto_add=True)), 
+        #            #     show_labels=False,
+        #            #     label='inputs',
+        #            #     show_border=True, 
+        #            #     scrollable=True
+        #            # ),
+        #            #),
+        #            'number_classes', 'bias_iters', 'bias_lowpass',
+        #            resizable=True,
+        #            #height=0.5,
+        #            title='Inputs for FAST',
+        #        )
+
+        infiles = traits.List(traits.File, 
+                             editor=tui.ListEditor(rows=3, style='custom',
+                             ui_kind='subpanel'), #auto_add=True),
+            desc="files to run on ['/path/to/afile', /path/to/anotherfile']")
+        number_classes = traits.Int(flag='--class %d ',
+            desc='number of tissue-type classes, (default=3)')
+        bias_iters = traits.Int(flag='--iter %d',
+            desc='number of main-loop iterations during bias-field removal' \
+            '(default=4)')
+        bias_lowpass = traits.Int(flag='--lowpass %d',
+            desc='bias field smoothing extent (FWHM) in mm (default=20)')
+        img_type = traits.Int(flag='--type %d',
+            desc='type of image 1=T1, 2=T2, 3=PD; (default=T1)')
+        init_seg_smooth = traits.Float(flag='--fHard %f',
+            desc='initial segmentation spatial smoothness (during bias field' \
+            'estimation); default=0.02')
+        segments = traits.Bool(flag='--segments',
+            desc='outputs a separate binary image for each tissue type')
+        init_transform = traits.Str(flag='-a %s', # a valid filename
+            desc='initialise using priors; you must supply a FLIRT transform' \
+            '<standard2input.mat>')
+        # This option is not really documented on the Fast web page:
+        # http://www.fmrib.ox.ac.uk/fsl/fast4/index.html#fastcomm
+        # I'm not sure if there are supposed to be exactly 3 args or what
+        # May want to use a Tuple or a List Trait depending on how this is supposed
+        # to be
+        other_priors = traits.Tuple('', '', '',  # should be fnames
+            flag='-A %s %s %s',
+            desc="<prior1> <prior2> <prior3>    alternative prior images")
+        nopve = traits.Bool(flag='--nopve',
+            desc='turn off PVE (partial volume estimation)')
+        output_biasfield = traits.Bool(flag='-b',
+            desc='output estimated bias field')
+        output_biascorrected = traits.Bool(flag='-B',
+            desc='output bias-corrected image')
+        nobias = traits.Bool(flag='--nobias',
+            desc='do not remove bias field')
+        n_inputimages = traits.Int(flag='--channels %d',
+            desc='number of input images (channels); (default 1)')
+        out_basename = traits.Str(flag='--out %s', # should be a filename
+            desc='output basename for output images')
+        use_priors = traits.Bool(flag='--Prior',
+            desc='use priors throughout; you must also set the init_transform' \
+            'option')
+        segment_iters = traits.Int(flag='--init %d',
+            desc='number of segmentation-initialisation iterations; (default=15)')
+        mixel_smooth = traits.Float(flag='--mixel %f',
+            desc='spatial smoothness for mixeltype; (default=0.3)')
+        iters_afterbias = traits.Int(flag='--fixed %d',
+            desc='number of main-loop iterations after bias-field removal;' \
+            '(default=4)')
+        hyper = traits.Float(flag='--Hyper %f',
+            desc='segmentation spatial smoothness; (default=0.1)')
+        verbose = traits.Bool(flag='--verbose',
+            desc='switch on diagnostic messages')
+        manualseg = traits.Str(flag='--manualseg %s', # a filename
+            desc='Filename containing intensities')
+        probability_maps = traits.Bool(flag='-p',
+            desc='outputs individual probability maps')
+        args = traits.ListStr(
+            desc="unsupported flags, use at your own risk  ['-R']")
 
     opt_map = {'number_classes':       '-n %d',
             'bias_iters':           '-I %d',
