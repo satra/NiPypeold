@@ -308,9 +308,17 @@ class FSLCommand(CommandLine):
 class TraitedCommand(CommandLine):
     '''Provides machinery for providing input and output specifications
 
+    Currently, we are using traitlets from the ipython project to provide a pure
+    python implementation.
+
     As much as possible, actual functional logic should be housed in this class,
     subclasses should primarily specify their inputs, outputs and other
-    command-line relevant properties in a declarative fashion.'''
+    command-line relevant properties in a declarative fashion.
+    
+    All valid metadata labels for the input_spec should be documented in the
+    _parse_inputs function, and all legal metadata for the output_spec should be
+    specified in the aggregate_outputs function. This is not necessarily the
+    case right now however.'''
     @property
     def cmdline(self):
         """validates fsl options and generates command line argument"""
@@ -320,7 +328,6 @@ class TraitedCommand(CommandLine):
 
     def __init__(self, **kwargs):
         super(TraitedCommand, self).__init__()
-        self.inputs = self.input_spec(**kwargs)
 
     # XXX: I don't think this is necessary in light of output_spec, raise with
     # group once feature-identical implementation is finished
@@ -353,6 +360,29 @@ class TraitedCommand(CommandLine):
 
         return results
 
+    def _format_arg(self, trait_spec, value):
+        '''A helper function for _parse_inputs'''
+        argstr = trait_spec.get_metadata('argstr')
+        if isinstance(trait_spec, traits.Bool) and value:
+            # Boolean options have no format string. Just append options
+            # if True.
+            return argstr
+        elif isinstance(trait_spec, traits.List):
+            # This is a bit simple-minded at present, and should be
+            # construed as the default. If more sophisticated behavior
+            # is needed, it can be accomplished with metadata (e.g.
+            # format string for list member str'ification, specifying
+            # the separator, etc.)
+
+            # Depending on whether we stick with traitlets, and whether or
+            # not we beef up traitlets.List, we may want to put some
+            # type-checking code here as well
+
+            return argstr % ' '.join(str(elt) for elt in value)
+        else:
+            # Append options using format string.
+            return argstr % value
+
     def _parse_inputs(self):
         """Parse all inputs and format options using the opt_map format string.
 
@@ -370,61 +400,44 @@ class TraitedCommand(CommandLine):
 
         Returns
         -------
-        allargs : list
+        all_args : list
             A list of all inputs formatted for the command line.
 
         """
-        allargs = []
-        # XXX Given the current implementation, we can't maintain compatability
-        # with Traits as well (easily)
-        inputs = sorted((k, v) for k, v in self.inputs.traitlets().iteritems())
-                            # if v is not None and k not in skip)
-        for opt, value in inputs:
-            if opt == 'args':
-                # XXX Where is this used?  Is self.inputs.args still
-                # used?  Or is it leftover from the original design of
-                # base.CommandLine?
-                allargs.extend(value)
+        all_args = []
+        initial_args = {}
+        final_args = {}
+
+        for name, trait_spec in sorted(self.inputs.traitlets().items()):
+            value = getattr(self.inputs, name)
+            if value == trait_spec.get_default_value():
+                # 'mandatory' implies the default value is no good
+                if trait_spec.get_metadata('mandatory'):
+                    warn('mandatory argument %s is not specified' % name)
                 continue
-            try:
-                argstr = self.opt_map[opt]
-                if argstr.find('%') == -1:
-                    # Boolean options have no format string. Just append options
-                    # if True.
-                    if value is True:
-                        allargs.append(argstr)
-                    elif value is not False:
-                        raise TypeError('Boolean option %s set to %s' %
-                                         (opt, str(value)) )
-                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
-                    # XXX Hack to deal with special case where some
-                    # parameters to Fnirt can have a variable number
-                    # of arguments.  Splitting the argument string,
-                    # like '--infwhm=%d', then add as many format
-                    # strings as there are values to the right-hand
-                    # side.
-                    argparts = argstr.split('=')
-                    allargs.append(argparts[0] + '=' +
-                                   ','.join([argparts[1] % y for y in value]))
-                elif isinstance(value, list):
-                    allargs.append(argstr % tuple(value))
+
+            arg = self._format_arg(trait_spec, value)
+            pos = trait_spec.get_metadata('position')
+            if pos:
+                if pos >= 0:
+                    initial_args[pos] = arg
                 else:
-                    # Append options using format string.
-                    allargs.append(argstr % value)
-            except TypeError, err:
-                msg = 'Error when parsing option %s in class %s.\n%s' % \
-                    (opt, self.__class__.__name__, err.message)
-                warn(msg)
-            except KeyError:
-                warn("Option '%s' is not supported!" % (opt))
+                    final_args[pos] = arg
+            else:
+                all_args.append(arg)
 
-        return allargs
+        return [arg for pos, arg in sorted(initial_args.items())] + \
+               all_args + \
+               [arg for pos, arg in sorted(final_args.items())]
 
-    def _populate_inputs(self):
-        self.inputs = Bunch((k,None) for k in self.opt_map.keys())
+    # XXX - do we really need this as a separate function now?
+    def _populate_inputs(self, **kwargs):
+        self.inputs = self.input_spec(**kwargs)
 
     def inputs_help(self):
         """Print command line documentation for the command."""
+        # Should just pass the whole class in, and get_doc should do the right
+        # thing if it's traited or whatnot
         print get_doc(self.cmd, self.opt_map, '-h')
 
     def aggregate_outputs(self):
@@ -492,27 +505,27 @@ class Bet(TraitedCommand):
         # put something on the end
         # Also, it would be nice to use traits.File types here, but Traitlets
         # doesn't support that (Yet)
-        infile = traits.Str(position=0, mandatory=True)
-        outfile = traits.Str(position=1, mandatory=True)
-        outline = traits.Bool(flag='-o')
-        mask = traits.Bool(flag='-m')
-        skull = traits.Bool(flag='-s')
-        nooutput = traits.Bool(flag='-n')
-        frac = traits.Float(flag='-f %.2f')
-        vertical_gradient = traits.Float(flag='-g %.2f')
-        radius = traits.Int(flag='-r %d', units='mm')
+        infile = traits.Str(argstr='%s', position=0, mandatory=True)
+        outfile = traits.Str(argstr='%s', position=1, mandatory=True)
+        outline = traits.Bool(argstr='-o')
+        mask = traits.Bool(argstr='-m')
+        skull = traits.Bool(argstr='-s')
+        nooutput = traits.Bool(argstr='-n')
+        frac = traits.Float(argstr='-f %.2f')
+        vertical_gradient = traits.Float(argstr='-g %.2f')
+        radius = traits.Int(argstr='-r %d', units='mm')
         # Note - Traitlets doesn't actually support the 'trait' metadata, so it
         # is just plain ol' metadata. But we use the same 'trait' id here for
         # consistency with the Traits API. Likewise for minlen and maxlen.
         # XXX Currently, default_value won't work for a List
-        center = traits.List(flag='-c %d %d %d', trait=traits.Int, minlen=3,
+        center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
                              maxlen=3, units='voxels')
-        threshold = traits.Bool(flag='-t')
-        mesh = traits.Bool(flag='-e')
-        verbose = traits.Bool(flag='-v')
-        functional = traits.Bool(flag='-F')
-        flags = traits.Bool(flag='%s')
-        reduce_bias = traits.Bool(flag='-B')
+        threshold = traits.Bool(argstr='-t')
+        mesh = traits.Bool(argstr='-e')
+        verbose = traits.Bool(argstr='-v')
+        functional = traits.Bool(argstr='-F')
+        args = traits.Str(argstr='%s')
+        reduce_bias = traits.Bool(argstr='-B')
 
     class output_spec(HasTraits):
         # Note - desc has special meaning in Traits, similar to __doc__
