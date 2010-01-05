@@ -35,7 +35,6 @@ from nipype.utils.misc import container_to_string, is_container
 
 # We are shooting for interoperability for now - Traits or Traitlets
 import nipype.externals.traitlets as traits
-HasTraits = traits.HasTraitlets
 
 warn = warnings.warn
 warnings.filterwarnings('always', category=UserWarning)
@@ -408,7 +407,7 @@ class TraitedCommand(CommandLine):
         initial_args = {}
         final_args = {}
 
-        for name, trait_spec in sorted(self.inputs.traitlets().items()):
+        for name, trait_spec in sorted(self.inputs.traits().items()):
             value = getattr(self.inputs, name)
             if value == trait_spec.get_default_value():
                 # 'mandatory' implies the default value is no good
@@ -499,7 +498,7 @@ class Bet(TraitedCommand):
         """sets base command, immutable"""
         return 'bet'
 
-    class input_spec(HasTraits):
+    class input_spec(traits.HasTraits):
         '''Note: Currently we don't support -R, -S, -Z,-A or -A2'''
         # We use position args here as list indices - so a negative number will
         # put something on the end
@@ -527,7 +526,7 @@ class Bet(TraitedCommand):
         args = traits.Str(argstr='%s')
         reduce_bias = traits.Bool(argstr='-B')
 
-    class output_spec(HasTraits):
+    class output_spec(traits.HasTraits):
         # Note - desc has special meaning in Traits, similar to __doc__
         outfile = traits.Str(desc="path/name of skullstripped file")
         maskfile = traits.Str(
@@ -665,7 +664,7 @@ class Fast(FSLCommand):
         """sets base command, not editable"""
         return 'fast'
 
-    class input_spec(HasTraits):
+    class input_spec(traits.HasTraits):
         # The following is an example of how we might structure an editable view
         # in real Traits. tui = traits.ui.api
         # You might play with it like this:
