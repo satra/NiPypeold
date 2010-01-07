@@ -29,10 +29,12 @@ class NodeWrapper(object):
         key and items to iterate using the pipeline engine
         for example to iterate over different frac values in fsl.Bet()
         node.iterables = dict(frac=lambda:[0.5,0.6,0.7])
-    iterfield : 1-element list
-        key over which to repeatedly call the function.
+    iterfield : 1+-element list
+        key(s) over which to repeatedly call the interface.
         for example, to iterate FSL.Bet over multiple files, one can
-        set node.iterfield = ['infile']
+        set node.iterfield = ['infile'].  If this list has more than 1 item
+        then the inputs are selected in order simultaneously from each of these
+        fields and each field will need to have the same number of members.
     base_directory : directory
         base output directory (will be hashed before creations)
         default=None, which results in the use of mkdtemp
@@ -110,7 +112,14 @@ class NodeWrapper(object):
         return self._interface.inputs
 
     def set_input(self, parameter, val):
-        setattr(self._interface.inputs, parameter, deepcopy(val))
+        """ Set interface input value or nodewrapper attribute
+
+        Priority goes to interface.
+        """
+        if hasattr(self._interface.inputs, parameter):
+            setattr(self._interface.inputs, parameter, deepcopy(val))
+        else:
+            setattr(self, parameter, deepcopy(val))
 
     def get_output(self, parameter):
         val = None
@@ -122,11 +131,12 @@ class NodeWrapper(object):
         return val
 
     def check_outputs(self, parameter):
-        return hasattr(self,parameter) or \
+        return hasattr(self, parameter) or \
             hasattr(self._interface.outputs(), parameter)
     
     def check_inputs(self, parameter):
-        return hasattr(self._interface.inputs,parameter)
+        return hasattr(self._interface.inputs, parameter) or \
+            hasattr(self, parameter)
 
     def _save_hashfile(self, hashfile, hashed_inputs):
         try:
@@ -220,29 +230,44 @@ class NodeWrapper(object):
 
     # XXX This function really seriously needs to check returncodes and similar
     def _run_interface(self, execute=True, cwd=None):
-        if cwd is not None:
-            old_cwd = os.getcwd()
+        old_cwd = os.getcwd()
+        if cwd:
             os.chdir(cwd)
-        if len(self.iterfield) > 1:
-            raise ValueError('At most one iterfield is supported at this time\n'
-                             'Got: %s in %s', (self.iterfield, self.name))
-        if len(self.iterfield) == 1:
+        if not cwd and self.disk_based:
+            cwd = self._output_directory()
+            os.chdir(cwd)
+        basewd = cwd
+        if self.iterfield:
             # This branch of the if takes care of iterfield and
-            # basically calls the underlying interface each time 
-            itervals = self.inputs.get(self.iterfield[0])
-            notlist = False
-            if not isinstance(itervals, list):
-                notlist = True
-                itervals = [itervals]
+            # basically calls the underlying interface each time
+            itervals = {}
+            notlist = {} 
+            for field in self.iterfield:
+                itervals[field] = self.inputs.get(field)
+                notlist[field] = False
+                if not isinstance(itervals[field], list):
+                    notlist[field] = True
+                    itervals[field] = [itervals[field]]
             self._result = InterfaceResult(interface=[], runtime=[],
                                            outputs=Bunch())
-            for i,v in enumerate(itervals):
-                logger.debug("iterating %s on %s: %s\n"%(self.name,
-                                                         self.iterfield[0],
-                                                         str(v)))
-                self.set_input(self.iterfield[0], v)
-                # XXX - SG - we might consider creating a sub
-                # directory for each v
+            for i,v in enumerate(itervals[self.iterfield[0]]):
+                if self.disk_based:
+                    subdir = os.path.join(basewd,'%s_%d'%(self.iterfield[0], i))
+                    if not os.path.exists(subdir):
+                        os.mkdir(subdir)
+                    os.chdir(subdir)
+                    cwd = subdir
+                    logger.debug("subdir: %s"%subdir)
+                for field in self.iterfield:
+                    newval = itervals[field][i]
+                    if self.disk_based:
+                        if os.path.isfile(newval):
+                            newval = list_to_filename(copyfiles(newval, [subdir],
+                                                                copy=False))
+                    self.set_input(field, newval)
+                    logger.debug("iterating %s on %s: %s\n"%(self.name,
+                                                             field,
+                                                             newval))
                 if issubclass(self._interface.__class__,CommandLine):
                     logger.info('cmd: %s'%self._interface.cmdline)
                 if execute:
@@ -253,6 +278,7 @@ class NodeWrapper(object):
                     # settle on a solution
                     result = self._interface.run(cwd=cwd)
                     if result.runtime.returncode:
+                        self._itervals = itervals
                         raise RuntimeError(result.runtime.stderr)
                     self._result.interface.insert(i, result.interface)
                     self._result.runtime.insert(i, result.runtime)
@@ -271,11 +297,12 @@ class NodeWrapper(object):
                         # outputs.key == None, so this is far less likely to
                         # produce subtle errors down the road!
                         setattr(self._result.outputs, key, [val])
-
-            if notlist:
-                self.set_input(self.iterfield[0], itervals.pop())
-            else:
-                self.set_input(self.iterfield[0], itervals)
+            # restore input state
+            for field in self.iterfield:
+                if notlist[field]:
+                    self.set_input(field, itervals[field].pop())
+                else:
+                    self.set_input(field, itervals[field])
         else:
             if issubclass(self._interface.__class__,CommandLine):
                 logger.info('cmd: %s'%self._interface.cmdline)
@@ -290,7 +317,7 @@ class NodeWrapper(object):
                 self._result = InterfaceResult(interface=None,
                                                runtime=None,
                                                outputs=aggouts)
-        if cwd is not None:
+        if cwd:
             os.chdir(old_cwd)
 
     def update(self, **opts):

@@ -44,14 +44,13 @@ def scans_for_fname(fname):
     """
     img = load(fname)
     if len(img.get_shape()) == 3:
-        flist = [['%s,1'%fname]]
-        return np.array([flist],dtype=object)
+        return np.array(('%s,1'%fname,),dtype=object)
     else:
         n_scans = img.get_shape()[3]
-        scans = []
+        scans = np.zeros((n_scans,),dtype=object)
         for sno in range(n_scans):
-            scans.insert(sno,['%s,%d'% (fname, sno+1)])
-        return np.array([scans],dtype=object)
+            scans[sno] = '%s,%d'% (fname, sno+1)
+        return scans
 
 def scans_for_fnames(fnames,keep4d=False,separate_sessions=False):
     """Converts a list of files to a concatenated numpy array for each
@@ -64,23 +63,25 @@ def scans_for_fnames(fnames,keep4d=False,separate_sessions=False):
         if 4d nifti files are being used, then separate_sessions
         ensures a cell array per session is created in the structure.
     """
-    if keep4d:
-        #flist = [[f] for f in fnames]
-        #return np.array([flist],dtype=object)
-        if not separate_sessions:
-            flist = [np.array((f,),dtype=object) for f in fnames]
-        else:
-            flist = np.array((tuple([np.array((f,),dtype=object) for f in fnames]),),dtype=object)
-        return np.array((flist,),dtype=object)
-    else:
-        n_sess = len(fnames)
-        scans = None
-        for sess in range(n_sess):
-            if scans is None:
-                scans = scans_for_fname(fnames[sess])[0]
+    flist = None
+    if separate_sessions or keep4d:
+        flist = np.zeros((len(fnames),),dtype=object)
+    for i,f in enumerate(fnames):
+        if separate_sessions:
+            if keep4d:
+                flist[i] = np.array([f],dtype=object)
             else:
-                scans = np.concatenate((scans,scans_for_fname(fnames[sess])[0]))
-        return np.array([scans],dtype=object)
+                flist[i] = scans_for_fname(f)
+        else:
+            if keep4d:
+                flist[i] = f
+            else:
+                scans = scans_for_fname(f)
+                if flist is None:
+                    flist = scans
+                else:
+                    flist = np.concatenate((flist,scans))
+    return flist
 
 class SpmInfo(object):
     """ Return the path to the spm directory in the matlab path
@@ -224,28 +225,29 @@ class SpmMatlabCommandLine(MatlabCommandLine):
                 jobstring += self._generate_job(newprefix, value)
             return jobstring
         if isinstance(contents, np.ndarray):
-            # XXX TODO Assumes list of filenames embedded in a numpy array
-            # does not support dicts embedded within a numpy array
-            jobstring += "%s = {...\n"%(prefix)
-            for item in contents[0]:
-                for i,f in enumerate(item):
-                    if isinstance(f,str):
-                        jobstring += '\'%s\';...\n'%(f)
-                    if isinstance(f, np.ndarray):
-                        if isinstance(f[0], str):
-                            jobstring += '{'
+            if contents.dtype == np.dtype(object):
+                if prefix:
+                    jobstring += "%s = {...\n"%(prefix)
+                else:
+                    jobstring += "{...\n"
+                for i,val in enumerate(contents):
+                    if isinstance(val, np.ndarray):
+                        jobstring += self._generate_job(prefix=None,
+                                                        contents=val)
+                    elif isinstance(val,str):
+                        jobstring += '\'%s\';...\n'%(val)
+                    else:
+                        jobstring += '%s;...\n'%str(val)
+                jobstring += '};\n'
+            else:
+                for i,val in enumerate(contents):
+                    for field in val.dtype.fields:
+                        if prefix:
+                            newprefix = "%s(%d).%s"%(prefix, i+1, field)
                         else:
-                            jobstring += '['
-                        for v in f:
-                            if isinstance(v, str):
-                                jobstring += '\'%s\';'%v
-                            else:
-                                jobstring += '%s;'%str(v)
-                        if isinstance(f[0], str):
-                            jobstring += '};...\n'
-                        else:
-                            jobstring += '];...\n'
-            jobstring += '};\n'
+                            newprefix = "(%d).%s"%(i+1, field)
+                        jobstring += self._generate_job(newprefix,
+                                                        val[field])
             return jobstring
         if isinstance(contents, str):
             jobstring += "%s = '%s';\n" % (prefix,contents)
@@ -288,7 +290,7 @@ class SpmMatlabCommandLine(MatlabCommandLine):
         if strcmp(spm('ver'),'SPM8'), spm_jobman('initcfg');end\n
         """
         if self.mfile:
-            if self.jobname in ['smooth','preproc','fmri_spec','fmri_est'] :
+            if self.jobname in ['st','smooth','preproc','fmri_spec','fmri_est'] :
                 mscript += self._generate_job('jobs{1}.%s{1}.%s(1)' % 
                                              (self.jobtype,self.jobname), contents[0])
             else:
@@ -322,6 +324,174 @@ class SpmMatlabCommandLine(MatlabCommandLine):
         """
         raise NotImplementedError
 
+class SliceTiming(SpmMatlabCommandLine):
+    """use spm_smooth for 3D Gaussian smoothing of image volumes.
+
+    See Smooth().spm_doc() for more information.
+
+    Parameters
+    ----------
+    inputs : dict 
+        key, value pairs that will update the Smooth.inputs attributes.
+        See self.inputs_help() for a list of Smooth.inputs attributes.
+    
+    Attributes
+    ----------
+    inputs : :class:`nipype.interfaces.base.Bunch`
+        Options that can be passed to spm_smooth via a job structure
+    cmdline : str
+        String used to call matlab/spm via SpmMatlabCommandLine interface
+
+    Other Parameters
+    ----------------
+    To see optional arguments
+    SliceTiming().inputs_help()
+
+    Examples
+    --------
+
+    >>> from nipype.interfaces.spm import SliceTiming
+    >>> st = SliceTiming()
+    >>> st.inputs.infile = 'func.nii'
+    >>> st.inputs.num_slices = 32
+    >>> st.inputs.time_repetition = 6.0
+    >>> st.inputs.time_acquisition = 6. - 6./32.
+    >>> st.inputs.slice_order = range(32,0,-1)
+    >>> st.inputs.ref_slice = 1
+    """
+
+    def spm_doc(self):
+        """Print out SPM documentation."""
+        print grab_doc('SliceTiming')
+    
+    @property
+    def cmd(self):
+        return 'spm_st'
+
+    @property
+    def jobtype(self):
+        return 'temporal'
+
+    @property
+    def jobname(self):
+        return 'st'
+
+    def inputs_help(self):
+        """
+        Parameters
+        ----------
+        infile : list
+            list of filenames to apply slice timing
+        num_slices : int
+            number of slices in a volume
+        time_repetition: float
+            time between volume acquisitions (start to start time)
+        time_acquisition: float
+            time of volume acquisition. usually calculated as
+            TR-(TR/num_slices) 
+        slice_order : list
+            order in which slices are acquired. ensure that this is a 1-based
+            list. 
+        ref_slice : int
+            Number of the reference slice. Remember 1-based numbering
+        flags : USE AT OWN RISK, optional
+            #eg:'flags':{'eoptions':{'suboption':value}}
+        """
+        print self.inputs_help.__doc__
+
+    def _populate_inputs(self):
+        """ Initializes the input fields of this interface.
+        """
+        self.inputs = Bunch(infile=None,
+                            num_slices=None,
+                            time_repetition=None,
+                            time_acquisition=None,
+                            slice_order=None,
+                            ref_slice=None,
+                            flags=None)
+
+    def get_input_info(self):
+        """ Provides information about inputs as a dict
+            info = [Bunch(key=string,copy=bool,ext='.nii'),...]
+        """
+        info = [Bunch(key='infile',copy=False)]
+        return info
+        
+    def _parseinputs(self):
+        """validate spm smooth options
+        if set to None ignore
+        """
+        out_inputs = []
+        inputs = {}
+        einputs = {'scans':[]}
+
+        [inputs.update({k:v}) for k, v in self.inputs.iteritems() if v is not None ]
+        for opt in inputs:
+            if opt == 'infile':
+                sess_scans = scans_for_fnames(filename_to_list(inputs[opt]),
+                                              separate_sessions=True)
+                einputs['scans'] = sess_scans
+                continue
+            if opt == 'num_slices':
+                einputs['nslices'] = int(inputs[opt])
+                continue
+            if opt == 'time_repetition':
+                einputs['tr'] = inputs[opt]
+                continue
+            if opt == 'time_acquisition':
+                einputs['ta'] = inputs[opt]
+                continue
+            if opt == 'slice_order':
+                einputs['so'] = inputs[opt]
+                continue
+            if opt == 'ref_slice':
+                einputs['refslice'] = inputs[opt]
+                continue
+            if opt == 'flags':
+                einputs.update(inputs[opt])
+                continue
+            print 'option %s not supported'%(opt)
+        return [einputs]
+
+    def run(self, infile=None, **inputs):
+        """Executes the SPM slice timing function using MATLAB
+        
+        Parameters
+        ----------
+        
+        infile: string, list
+            image file(s) to smooth
+        """
+        if infile:
+            self.inputs.infile = infile
+        if not self.inputs.infile:
+            raise AttributeError('Slice timing requires a file')
+        self.inputs.update(**inputs)
+        return super(SliceTiming,self).run()
+
+    def outputs(self):
+        """
+        Parameters
+        ----------
+        (all default to None)
+        
+        timecorrected_files :
+            slice time corrected files corresponding to inputs.infile
+        """
+        outputs = Bunch(timecorrected_files=None)
+        return outputs
+        
+    def aggregate_outputs(self):
+        outputs = self.outputs()
+        outputs.timecorrected_files = []
+        filelist = filename_to_list(self.inputs.infile)
+        for f in filelist:
+            s_file = glob(fname_presuffix(f, prefix='a',
+                                          suffix='.nii',use_ext=False))
+            assert len(s_file) == 1, 'No slice time corrected file generated by SPM Slice Timing'
+            outputs.timecorrected_files.append(s_file[0])
+        return outputs
+    
 class Realign(SpmMatlabCommandLine):
     """Use spm_realign for estimating within modality rigid body alignment
 
@@ -980,7 +1150,7 @@ class Normalize(SpmMatlabCommandLine):
                 einputs['subj']['resample'] = scans_for_fnames(inputfiles)
                 continue
             if opt == 'parameter_file':
-                einputs['subj']['matname'] = np.array([[[list_to_filename(inputs[opt])]]],dtype=object)
+                einputs['subj']['matname'] = np.array([list_to_filename(inputs[opt])],dtype=object)
                 continue
             if opt == 'jobtype':
                 if inputs[opt] in ['estwrite', 'write']:
@@ -1747,7 +1917,7 @@ class Level1Design(SpmMatlabCommandLine):
         [inputs.update({k:v}) for k, v in self.inputs.iteritems() if v is not None ]
         for opt in inputs:
             if opt == 'spmmat_dir':
-                einputs['dir'] = np.array([[[str(inputs[opt])]]],dtype=object)
+                einputs['dir'] = np.array([str(inputs[opt])],dtype=object)
                 continue
             if opt == 'timing_units':
                 einputs['timing'].update(units=inputs[opt])
@@ -1779,7 +1949,7 @@ class Level1Design(SpmMatlabCommandLine):
                 einputs['global'] = inputs[opt]
                 continue
             if opt == 'mask_image':
-                einputs['mask'] = np.array([[[str(inputs[opt])]]],dtype=object)
+                einputs['mask'] = np.array([str(inputs[opt])],dtype=object)
                 continue
             if opt == 'model_serial_correlations':
                 einputs['cvi'] = inputs[opt]
@@ -1789,7 +1959,7 @@ class Level1Design(SpmMatlabCommandLine):
                 continue
             print 'option %s not supported'%(opt)
         if einputs['dir'] == '':
-            einputs['dir'] = np.array([[[str(os.getcwd())]]],dtype=object)
+            einputs['dir'] = np.array([str(os.getcwd())],dtype=object)
         return [einputs]
 
     def _compile_command(self):
@@ -1913,7 +2083,7 @@ class EstimateModel(SpmMatlabCommandLine):
         [inputs.update({k:v}) for k, v in self.inputs.iteritems() if v is not None ]
         for opt in inputs:
             if opt == 'spm_design_file':
-                einputs['spmmat'] = np.array([[[str(inputs[opt])]]],dtype=object)
+                einputs['spmmat'] = np.array([str(inputs[opt])],dtype=object)
                 continue
             if opt == 'estimation_method':
                 einputs['method'].update(inputs[opt])
@@ -2066,7 +2236,7 @@ class EstimateContrast(SpmMatlabCommandLine):
         [inputs.update({k:v}) for k, v in self.inputs.iteritems() if v is not None ]
         for opt in inputs:
             if opt == 'spm_mat_file':
-                einputs['spmmat'] = np.array([[[str(inputs[opt])]]],dtype=object)
+                einputs['spmmat'] = np.array([str(inputs[opt])],dtype=object)
                 continue
             if opt == 'contrasts':
                 continue

@@ -15,6 +15,7 @@ import nipype.interfaces.spm as spm          # spm
 import nipype.pipeline.node_wrapper as nw    # nodes for pypelines
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.algorithms.rapidart as ra      # artifact detection
+import nipype.algorithms.modelgen as model   # model generation
 import os                                    # system functions
 
 #####################################################################
@@ -57,7 +58,7 @@ fsl.fsl_info.outputtype('NIFTI')
 # The following lines create some information about location of your
 # data. 
 data_dir = os.path.abspath('data')
-subject_list = ['s1','s3']
+subject_list = ['s1'] #, 's3']
 # The following info structure helps the DataSource module organize
 # nifti files into fields/attributes of a data object. With DataSource
 # this object is of type Bunch.
@@ -218,14 +219,14 @@ def subjectinfo(subject_id):
 """
 cont1 = ['Task>Baseline','T', ['Task-Odd','Task-Even'],[0.5,0.5]]
 cont2 = ['Task-Odd>Task-Even','T', ['Task-Odd','Task-Even'],[1,-1]]
+cont3 = ['Task','F', [cont1, cont2]]
 contrasts = [cont1,cont2]
 
 """
    c. Use :class:`nipype.interfaces.spm.SpecifyModel` to generate
    SPM-specific design information. 
 """
-modelspec = nw.NodeWrapper(interface=spm.SpecifyModel())
-modelspec.inputs.subject_info_func       = subjectinfo
+modelspec = nw.NodeWrapper(interface=model.SpecifyModel(), diskbased=True)
 modelspec.inputs.concatenate_runs        = False
 modelspec.inputs.input_units             = 'secs'
 modelspec.inputs.output_units            = 'secs'
@@ -234,15 +235,35 @@ modelspec.inputs.high_pass_filter_cutoff = 120
 
 
 """
-   d. Use :class:`nipype.interfaces.spm.Level1Design` to generate a
-   first level SPM.mat file for analysis
+   d. Use :class:`nipype.interfaces.fsl.Level1Design` to generate a
+   run specific fsf file for analysis
 """
 level1design = nw.NodeWrapper(interface=fsl.Level1Design(),diskbased=True)
 level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
 level1design.inputs.bases              = {'hrf':{'derivs': False}}
 level1design.inputs.contrasts          = contrasts
-level1design.overwrite = True
 
+"""
+   e. Use :class:`nipype.interfaces.fsl.FeatModel` to generate a
+   run specific mat file for use by FilmGLS
+"""
+modelgen = nw.NodeWrapper(interface=fsl.FeatModel(),diskbased=True)
+modelgen.iterfield = ['fsf_file']
+
+"""
+   f. Use :class:`nipype.interfaces.fsl.FilmGLS` to estimate a model
+   specified by a mat file and a functional run
+"""
+modelestimate = nw.NodeWrapper(interface=fsl.FilmGLS(),diskbased=True)
+modelestimate.inputs.thresh = 10
+modelestimate.iterfield = ['designfile','infile']
+
+"""
+   f. Use :class:`nipype.interfaces.fsl.ContrastMgr` to estimate
+   contrasts
+"""
+conestimate = nw.NodeWrapper(interface=fsl.ContrastMgr(),diskbased=True)
+conestimate.iterfield = ['tconfile','statsdir']
 
 ##########################
 # Setup storage of results
@@ -254,14 +275,14 @@ datasink = nw.NodeWrapper(interface=nio.DataSink())
 datasink.inputs.base_directory = os.path.abspath('./fsl/l1output')
 
 #####################
-# Set up preproc pype
+# Set up l1pipeline pype
 #####################
 
-preproc = pe.Pipeline()
-preproc.config['workdir'] = os.path.abspath('./fsl/workingdir')
-preproc.config['use_parameterized_dirs'] = True
+l1pipeline = pe.Pipeline()
+l1pipeline.config['workdir'] = os.path.abspath('./fsl/workingdir')
+l1pipeline.config['use_parameterized_dirs'] = True
 
-preproc.connect([# preprocessing in native space
+l1pipeline.connect([# preprocessing in native space
                  (datasource, skullstrip,[('struct','infile')]),
                  (datasource, motion_correct, 
                      [('func', 'infile'), ('func_ref', 'reffile')]),
@@ -287,14 +308,20 @@ preproc.connect([# preprocessing in native space
                  # Smooth :\
                  (funcapplywarp, smoothing, [('outfile', 'infile')]),
                  # Model design
-                 (datasource,modelspec,[('subject_id','subject_id')]),
+                 (datasource,modelspec,[('subject_id','subject_id'),
+                                        (('subject_id',subjectinfo),'subject_info_func')]),
                  (motion_correct,modelspec,[('parfile','realignment_parameters')]),
                  (smoothing,modelspec,[('smoothedimage','functional_runs')]),
-                 (modelspec,level1design,[('session_info','session_info')]),                 
+                 (modelspec,level1design,[('session_info','session_info')]),
+                 (level1design,modelgen,[('fsf_files','fsf_file')]),
+                 (level1design,modelestimate,[('func_files','infile')]),
+                 (modelgen,modelestimate,[('designfile','designfile')]),
+                 (modelgen,conestimate,[('confile','tconfile')]),
+                 (modelestimate,conestimate,[('statsdir','statsdir')]),
                 ])
 
 # store relevant outputs from various stages of preprocessing
-preproc.connect([(datasource,datasink,[('subject_id','subject_id')]),
+l1pipeline.connect([(datasource,datasink,[('subject_id','subject_id')]),
                     (skullstrip, datasink, 
                         [('outfile', 'skullstrip.@outfile')]),
                     (func_skullstrip, datasink,
@@ -326,6 +353,6 @@ preproc.connect([(datasource,datasink,[('subject_id','subject_id')]),
    analysis on the data the ``nipype.pipeline.engine.Pipeline.Run``
    function needs to be called. 
 """
-#if __name__ == '__main__':
-#    l1pipeline.run()
+if __name__ == '__main__':
+    l1pipeline.run_in_series()
 #    l2pipeline.run()
