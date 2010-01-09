@@ -177,7 +177,10 @@ class FSLInfo(object):
             cwd = os.getcwd()
 
         if fname is None:
-            fname = fname_presuffix(list_to_filename(basename), suffix=suffix, newpath=cwd)
+            ftype,ext = self.outputtype()
+            suffix = '.'.join((suffix,ext))
+            fname = fname_presuffix(list_to_filename(basename), suffix=suffix,
+                                    use_ext=False, newpath=cwd)
 
         if check:
             fname = fsl_info.glob(fname)
@@ -538,23 +541,20 @@ class Bet(TraitedCommand):
         """Print command line documentation for Bet."""
         print get_doc(self.cmd, self.opt_map, trap_error=False)
 
-    def _parse_inputs(self):
-        """validate fsl bet options"""
-        allargs = super(Bet, self)._parse_inputs(skip=('infile', 'outfile'))
+    # The TraitedCommand _parse_inputs should be able to handle this stuff...
+    # def _parse_inputs(self):
+    #     """validate fsl bet options"""
+    #     allargs = super(Bet, self)._parse_inputs(skip=('infile', 'outfile'))
 
-        if self.inputs.infile:
-            # TODO: This should not be here but since _parse_inputs is called by
-            # the logger through cmdline before run it needs to be included
-            # twice
-            self.inputs.infile = list_to_filename(self.inputs.infile)
+    #     if self.inputs.infile:
+    #         infile = list_to_filename(self.inputs.infile)
+    #         allargs.insert(0, infile)
+    #         outfile = fsl_info.gen_fname(infile,
+    #                                      self.inputs.outfile,
+    #                                      suffix='_brain')
+    #         allargs.insert(1, outfile)
 
-            allargs.insert(0, self.inputs.infile)
-            outfile = fsl_info.gen_fname(self.inputs.infile,
-                                         self.inputs.outfile,
-                                         suffix='_bet')
-            allargs.insert(1, outfile)
-
-        return allargs
+    #     return allargs
 
     def run(self, cwd=None, infile=None, outfile=None, **inputs):
         """Execute the command.
@@ -565,7 +565,7 @@ class Bet(TraitedCommand):
             Filename to be skull stripped.
         outfile : string, optional
             Filename to save output to. If not specified, the ``infile``
-            filename will be used with a "_bet" suffix.
+            filename will be used with a "_brain" suffix.
         inputs : dict
             Additional ``inputs`` assignments can be passed in.  See
             Examples section.
@@ -594,7 +594,6 @@ class Bet(TraitedCommand):
             self.inputs.infile = infile
         if self.inputs.infile is None:
             raise ValueError('Bet requires an input file')
-        self.inputs.infile = list_to_filename(self.inputs.infile)
         if isinstance(self.inputs.infile, list):
             raise ValueError('Bet does not support multiple input files')
         if outfile:
@@ -634,7 +633,7 @@ class Bet(TraitedCommand):
         if not cwd:
             cwd = os.getcwd()
         outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
-                                self.inputs.outfile, cwd=cwd, suffix='_bet',
+                                self.inputs.outfile, cwd=cwd, suffix='_brain',
                                 check=True)
         if self.inputs.mask or self.inputs.reduce_bias:
             outputs.maskfile = fsl_info.gen_fname(outputs.outfile, cwd=cwd,
@@ -1962,21 +1961,16 @@ class Level1Design(Interface):
             ``modelgen.SpecifyModel`` 
         bases : dict {'name':{'basesparam1':val,...}}
             name : string
-                Name of basis function (hrf, fourier, fourier_han,
-                gamma, fir)
+                Name of basis function (hrf - double gamma hrf)
 
                 hrf :
                     derivs : boolean
                         Model  HRF  Derivatives.
-                fourier, fourier_han, gamma, fir:
-                    length : int
-                        Post-stimulus window length (in seconds)
-                    order : int
-                        Number of basis functions
         model_serial_correlations : string
             Option to model serial correlations using an
-            autoregressive estimator. AR(1) or none
-            SPM default = AR(1)
+            autoregressive estimator. Setting this option is only
+            useful in the context of the fsf file. You need to repeat
+            this option for FilmGLS
         contrasts : list of dicts
             List of contrasts with each list containing: 'name', 'stat',
             [condition list], [weight list]. 
@@ -2020,41 +2014,48 @@ class Level1Design(Interface):
         """
         conds = {}
         evname = []
-        ev_gamma  = load_template('feat_ev_gamma.tcl')
+        ev_hrf  = load_template('feat_ev_hrf.tcl')
         ev_none   = load_template('feat_ev_none.tcl')
         ev_ortho  = load_template('feat_ev_ortho.tcl')
         contrast_header  = load_template('feat_contrast_header.tcl')
         contrast_prolog  = load_template('feat_contrast_prolog.tcl')
         contrast_element = load_template('feat_contrast_element.tcl')
         ev_txt = ''
-        # generate sections for conditions and other nuisance regressors
+        # generate sections for conditions and other nuisance
+        # regressors
+        num_evs = [0,0]
         for field in ['cond','regress']:
             for i,cond in enumerate(runinfo[field]):
                 name = cond['name']
                 evname.append(name)
                 evfname = os.path.join(cwd,'ev_%s_%d_%d.txt'%(name,runidx,len(evname)))
                 evinfo = []
+                num_evs[0] += 1
+                num_evs[1] += 1
                 if field == 'cond':
                     for j,onset in enumerate(cond['onset']):
                         if len(cond['duration'])>1:
                             evinfo.insert(j,[onset,cond['duration'][j],1])
                         else:
                             evinfo.insert(j,[onset,cond['duration'][0],1])
-                    ev_txt += ev_gamma.substitute(ev_num=len(evname),
-                                                  ev_name=name,
-                                                  temporalderiv=usetd,
-                                                  cond_file=evfname)
+                    ev_txt += ev_hrf.substitute(ev_num=num_evs[0],
+                                                ev_name=name,
+                                                temporalderiv=usetd,
+                                                cond_file=evfname)
+                    if usetd:
+                        evname.append(name+'TD')
+                        num_evs[1] += 1
                 elif field == 'regress':
                     evinfo = [[j] for j in cond['val']]
-                    ev_txt += ev_none.substitute(ev_num=len(evname),
+                    ev_txt += ev_none.substitute(ev_num=num_evs[0],
                                                  ev_name=name,
                                                  cond_file=evfname)
                 ev_txt += "\n"
                 conds[name] = evfname
                 self._create_ev_file(evfname,evinfo)
         # add orthogonalization
-        for i in range(1,len(evname)+1):
-            for j in range(len(evname)+1):
+        for i in range(1,num_evs[0]+1):
+            for j in range(0,num_evs[0]+1):
                 ev_txt += ev_ortho.substitute(c0=i,c1=j)
                 ev_txt += "\n"
         # add t contrast info
@@ -2064,15 +2065,19 @@ class Level1Design(Interface):
                 ev_txt += contrast_prolog.substitute(cnum=j+1,
                                                      ctype=ctype,
                                                      cname=con[0])
+                count = 0
                 for c in range(1,len(evname)+1):
+                    if evname[c-1].endswith('TD') and ctype == 'orig':
+                        continue
+                    count = count+1
                     if evname[c-1] in con[2]:
                         val = con[3][con[2].index(evname[c-1])]
                     else:
                         val = 0.0
-                    ev_txt += contrast_element.substitute(cnum=j+1, element=c,
+                    ev_txt += contrast_element.substitute(cnum=j+1, element=count,
                                                           ctype=ctype, val=val)
                     ev_txt += "\n"
-        return conds,ev_txt
+        return num_evs,ev_txt
 
     def run(self, cwd=None, **inputs):
         if cwd is None:
@@ -2082,7 +2087,7 @@ class Level1Design(Interface):
         fsf_postscript= load_template('feat_nongui.tcl')
 
         prewhiten = int(self.inputs.model_serial_correlations == 'AR(1)')
-        if self.inputs.bases.has_key('hrf'):
+        if self.inputs.bases and self.inputs.bases.has_key('hrf'):
             usetd = int(self.inputs.bases['hrf']['derivs'])
         else:
             usetd = 0
@@ -2101,14 +2106,15 @@ class Level1Design(Interface):
         print [n_tcon, n_fcon]
         
         for i,info in enumerate(session_info):
-            curr_conds,cond_txt  = self._create_ev_files(cwd,info,i,usetd,self.inputs.contrasts)
+            num_evs,cond_txt  = self._create_ev_files(cwd,info,i,usetd,self.inputs.contrasts)
             nim = load(func_files[i])
             (x,y,z,timepoints) = nim.get_shape()
             fsf_txt = fsf_header.substitute(scan_num=i,
                                             interscan_interval=self.inputs.interscan_interval,
                                             num_vols=timepoints,
                                             prewhiten=prewhiten,
-                                            num_evs=len(curr_conds),
+                                            num_evs=num_evs[0],
+                                            num_evs_real=num_evs[1],
                                             num_tcon=n_tcon,
                                             num_fcon=n_fcon,
                                             high_pass_filter_cutoff=info['hpf'],
@@ -2130,6 +2136,8 @@ class Level1Design(Interface):
         key = 'session_info'
         data = loadflat(session_info_file)
         session_info = data[key]
+        if isinstance(session_info,dict):
+            session_info = [session_info]
         return session_info
         
     def _get_func_files(self, session_info):
@@ -2336,19 +2344,15 @@ class FilmGLS(FSLCommand):
                                                            'designfile',
                                                            'thresh'))
 
+        # special defaults
+        if not self.inputs.rn:
+            allargs.append("-rn %s"%self._get_statsdir())
+
         if self.inputs.infile:
             # TODO: This should not be here but since _parse_inputs is
             # called by the logger through cmdline before run it needs
             # to be included twice
-            allargs.insert(0, list_to_filename(self.inputs.infile))
-
-        # special defaults
-        if not self.inputs.rn:
-            allargs.append("-rn %s"%self._get_statsdir())
-        if not self.inputs.sa:
-            allargs.append("-sa")
-        if not self.inputs.ms:
-            allargs.append("-ms 5")
+            allargs.append(list_to_filename(self.inputs.infile))
 
         if self.inputs.designfile:
             allargs.append(list_to_filename(self.inputs.designfile))
@@ -2363,7 +2367,8 @@ class FilmGLS(FSLCommand):
     def _get_statsdir(self):
         statsdir = self.inputs.rn
         if not statsdir:
-            statsdir = 'stats'
+            path,name = os.path.split(list_to_filename(self.inputs.designfile))
+            statsdir = '.'.join((os.path.splitext(name)[0],'stats'))
         return statsdir
         
     def run(self, infile=None, designfile=None, thresh=None, cwd=None, **inputs):
@@ -2477,10 +2482,7 @@ class FilmGLS(FSLCommand):
         assert len(sigmasquareds) == 1, 'No sigmasquareds volume generated by FSL Estimate'
         outputs.sigmasquareds = sigmasquareds[0];
 
-        statsdir = self.inputs.rn
-        if not statsdir:
-            statsdir = 'stats'
-        outputs.statsdir = os.path.join(os.getcwd(),statsdir)
+        outputs.statsdir = os.path.join(os.getcwd(),self._get_statsdir())
 
         return outputs
 
@@ -2593,12 +2595,15 @@ class ContrastMgr(FSLCommand):
                 t-stat file for each contrast
             neff:
                 neff file??
+            statsdir :
+                directory storing model estimation output
         """
         outputs = Bunch(copes=None,
                         varcopes=None,
                         zstats=None,
                         tstats=None,
-                        neffs=None)
+                        neffs=None,
+                        statsdir=None)
         return outputs
         
     def aggregate_outputs(self, cwd=None):
@@ -2624,6 +2629,8 @@ class ContrastMgr(FSLCommand):
         neffs = glob(os.path.join(pth,'neff[0-9]*.*'))
         assert len(neffs) >= 1, 'No neff volumes generated by FSL CEstimate'
         outputs.neffs = neffs
+        
+        outputs.statsdir = self.inputs.statsdir
         
         return outputs
 
@@ -3616,7 +3623,7 @@ class Tbss3postreg(FSLCommand):
         allargs = super(Tbss3postreg,self)._parse_inputs()
         return allargs
 
-    def run(self, noseTest=False, **inputs):
+    def run(self,noseTest=False,cwd=None,**inputs):
         """Execute the command.
         >>> from nipype.interfaces import fsl
         >>> tbss3 = fsl.Tbss3postreg(subject_means=True)
@@ -3628,9 +3635,12 @@ class Tbss3postreg(FSLCommand):
         if (self.inputs.subject_means is None) and (self.inputs.FMRIB58_FA is None):
             raise AttributeError('tbss_1_preproc requires at least one option flag to be set')
 
-        results = self._runner()
+        if cwd is None:
+            cwd=os.getcwd()
+
+        results = self._runner(cwd=cwd)
         if not noseTest:
-            results.outputs = self.aggregate_outputs()
+            results.outputs = self.aggregate_outputs(cwd)
 
         return results
 
@@ -3662,7 +3672,7 @@ class Tbss3postreg(FSLCommand):
                         mean_FA_mask=None)
         return outputs
 
-    def aggregate_outputs(self):
+    def aggregate_outputs(self,cwd):
         """Create a Bunch which contains all possible files generated
         by running the interface.  Some files are always generated, others
         depending on which ``inputs`` options are set.
@@ -3679,10 +3689,10 @@ class Tbss3postreg(FSLCommand):
         """
 
         outputs=self.outputs()
-        if os.path.isdir(os.getcwd()+'/stats'):
-            stats_files = glob(os.getcwd()+'/stats/*')
+        if os.path.isdir(cwd+'/stats'):
+            stats_files = glob(cwd+'/stats/*')
         else:
-            raise AttributeError('No stats subdirectory was found in cwd: \n'+os.getcwd())
+            raise AttributeError('No stats subdirectory was found in cwd: \n'+cwd)
 
         for imagePath in stats_files:
             if re.search('all_FA\.',imagePath):
@@ -3731,7 +3741,7 @@ class Tbss4prestats(FSLCommand):
 
         return allargs
 
-    def run(self, noseTest=False, **inputs):
+    def run(self, noseTest=False, cwd=None,**inputs):
         """Execute the command.
         >>> from nipype.interfaces import dti
         >>> tbss4 = fsl.Tbss4prestats(threshold=0.3)
@@ -3740,10 +3750,12 @@ class Tbss4prestats(FSLCommand):
 
         """
         self.inputs.update(**inputs)
+        if cwd is None:
+            cwd=os.getcwd()
 
-        results = self._runner()
+        results = self._runner(cwd=cwd)
         if not noseTest:
-            results.outputs = self.aggregate_outputs()
+            results.outputs = self.aggregate_outputs(cwd)
 
         return results
 
@@ -3772,7 +3784,7 @@ class Tbss4prestats(FSLCommand):
                         mean_FA_skeleton_mask=None)
         return outputs
 
-    def aggregate_outputs(self):
+    def aggregate_outputs(self,cwd):
         """Create a Bunch which contains all possible files generated
         by running the interface.  Some files are always generated, others
         depending on which ``inputs`` options are set.
@@ -3789,10 +3801,10 @@ class Tbss4prestats(FSLCommand):
         """
         outputs = self.outputs()
 
-        if os.path.isdir(os.getcwd()+'/stats'):
-            stats_files = glob(os.getcwd()+'/stats/*')
+        if os.path.isdir(cwd+'/stats'):
+            stats_files = glob(cwd+'/stats/*')
         else:
-            raise AttributeError('No stats subdirectory was found in cwd: \n'+os.getcwd())
+            raise AttributeError('No stats subdirectory was found in cwd: \n'+cwd)
 
         for imagePath in stats_files:
             if re.search('all_FA_skeletonised\.',imagePath):
@@ -3900,7 +3912,7 @@ class Randomise(FSLCommand):
 
         return allargs
 
-    def run(self, input_4D=None,output_rootname=None,**inputs):
+    def run(self, input_4D=None,output_rootname=None,cwd=None,**inputs):
         """Execute the command.
         >>> from nipype.interfaces import fsl
         >>> rand = fsl.Randomise(input_4D='infile2',output_rootname='outfile2',f_contrast='infile.f',one_sample_gmean=True,int_seed=4)
@@ -3917,9 +3929,12 @@ class Randomise(FSLCommand):
 
         self.inputs.update(**inputs)
 
-        results = self._runner()
+        if cwd is None:
+            cwd=os.getcwd()
+
+        results = self._runner(cwd=cwd)
         if results.runtime.returncode == 0:
-            results.outputs = self.aggregate_outputs()
+            results.outputs = self.aggregate_outputs(cwd)
 
         return results
 
@@ -3947,7 +3962,7 @@ class Randomise(FSLCommand):
         outputs = Bunch(tstat=None)
         return outputs
 
-    def aggregate_outputs(self):
+    def aggregate_outputs(self,cwd):
         """Create a Bunch which contains all possible files generated
         by running the interface.  Some files are always generated, others
         depending on which ``inputs`` options are set.
