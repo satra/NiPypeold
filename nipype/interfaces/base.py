@@ -371,7 +371,12 @@ class CommandLine(Interface):
         except KeyError:
             pass
 
-        self.inputs.update(inputs)
+        # XXX The Traited versions of `inputs` do not have an update
+        # method.  This for loop should do the same thing as the
+        # Bunch.update.  This comment should be removed once all the
+        # tests are passing. # self.inputs.update(inputs)
+        for k, v in inputs.items():
+            setattr(self.inputs, k, v)
 
         if args:
             # Note: .get() returns None if key doesn't exist

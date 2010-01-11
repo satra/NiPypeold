@@ -421,7 +421,7 @@ class TraitedCommand(CommandLine):
 
             arg = self._format_arg(trait_spec, value)
             pos = trait_spec.get_metadata('position')
-            if pos:
+            if pos is not None:
                 if pos >= 0:
                     initial_args[pos] = arg
                 else:
@@ -429,9 +429,10 @@ class TraitedCommand(CommandLine):
             else:
                 all_args.append(arg)
 
-        return [arg for pos, arg in sorted(initial_args.items())] + \
-               all_args + \
-               [arg for pos, arg in sorted(final_args.items())]
+        first_args = [arg for pos, arg in sorted(initial_args.items())]
+        last_args = [arg for pos, arg in sorted(final_args.items())]
+        return first_args + all_args + last_args
+
 
     # XXX - do we really need this as a separate function now?
     def _populate_inputs(self, **kwargs):
