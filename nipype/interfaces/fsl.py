@@ -415,8 +415,17 @@ class TraitedCommand(CommandLine):
             value = getattr(self.inputs, name)
             if value == trait_spec.get_default_value():
                 # 'mandatory' implies the default value is no good
-                if trait_spec.get_metadata('mandatory'):
-                    warn('mandatory argument %s is not specified' % name)
+
+                # XXX I commented out this warning as it's very noisy
+                # and we only 'need' the mandatory params when we call
+                # run.  The warning is printed out multiple times for
+                # each mandatory parameter for each test in
+                # test_fsl.test_bet.  Perhaps a separate method that
+                # checks the mandatory params that could be called
+                # from run?
+
+                #if trait_spec.get_metadata('mandatory'):
+                #    warn('mandatory argument %s is not specified' % name)
                 continue
 
             arg = self._format_arg(trait_spec, value)
