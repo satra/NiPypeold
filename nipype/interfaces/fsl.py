@@ -469,6 +469,14 @@ class TraitedAttr(traits.HasTraits):
     solution to move forward on the refactoring.
     """
 
+    # XXX These are common inputs that I believe all CommandLine
+    # objects are suppose to have.  Should we define these here?  As
+    # opposed to in each input_spec.  They would not make sense for
+    # the output_spec, but I don't know if output_spec needs a parent
+    # class like this one.
+    flags = traits.Str(argstr='%s')
+    args = traits.Str(argstr='%s')
+
     def update(self, **inputs):
         for k, v in inputs.items():
             setattr(self, k, v)
@@ -544,7 +552,6 @@ class Bet(TraitedCommand):
         mesh = traits.Bool(argstr='-e')
         verbose = traits.Bool(argstr='-v')
         functional = traits.Bool(argstr='-F')
-        args = traits.Str(argstr='%s')
         reduce_bias = traits.Bool(argstr='-B')
 
     class output_spec(traits.HasTraits):
