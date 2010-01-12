@@ -431,6 +431,20 @@ class TraitedCommand(CommandLine):
         last_args = [arg for pos, arg in sorted(final_args.items())]
         return first_args + all_args + last_args
 
+    def check_mandatory_inputs(self):
+        for name, trait_spec in sorted(self.inputs.traits().items()):
+            if trait_spec.get_metadata('mandatory'):
+                # mandatory parameters must be set and therefore
+                # should not have the default value.  XXX It seems
+                # possible that a default value would be a valid
+                # 'value'?  Currently most of the required params are
+                # filenames where the default_value is the empty
+                # string, so this may not be an issue.
+                value = getattr(self.inputs, name)
+                if value == trait_spec.get_default_value():
+                    msg = "%s requires a value for input '%s'" % \
+                        (self.__class__.__name__, name)
+                    raise ValueError(msg)
 
     # XXX - do we really need this as a separate function now?
     def _populate_inputs(self, **kwargs):
@@ -612,6 +626,8 @@ class Bet(TraitedCommand):
         True
 
         """
+        self.check_mandatory_inputs()
+
         if infile:
             self.inputs.infile = infile
         if self.inputs.infile is None:
