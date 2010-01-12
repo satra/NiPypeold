@@ -397,19 +397,10 @@ class TraitedCommand(CommandLine):
             return argstr % value
 
     def _parse_inputs(self):
-        """Parse all inputs and format options using the opt_map format string.
+        """Parse all inputs using the ``argstr`` format string in the Trait.
 
-        Any inputs that are assigned (that are not None) are formatted
+        Any inputs that are assigned (not the default_value) are formatted
         to be added to the command line.
-
-        Parameters
-        ----------
-        skip : tuple or list
-            Inputs to skip in the parsing.  This is for inputs that
-            require special handling, for example input files that
-            often must be at the end of the command line.  Inputs that
-            require special handling like this should be handled in a
-            _parse_inputs method in the subclass.
 
         Returns
         -------
