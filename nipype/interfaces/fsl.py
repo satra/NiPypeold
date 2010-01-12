@@ -366,10 +366,20 @@ class TraitedCommand(CommandLine):
     def _format_arg(self, trait_spec, value):
         '''A helper function for _parse_inputs'''
         argstr = trait_spec.get_metadata('argstr')
-        if isinstance(trait_spec, traits.Bool) and value:
-            # Boolean options have no format string. Just append options
-            # if True.
-            return argstr
+        if isinstance(trait_spec, traits.Bool):
+            if value:
+                # Boolean options have no format string. Just append options
+                # if True.
+                return argstr
+            else:
+                # If we end up here we're trying to add a Boolean to
+                # the arg string but whose value is False.  This
+                # should not happen, something went wrong upstream.
+                # Raise an error.
+                msg = "Object '%s' attempting to format argument " \
+                    "string for attr '%s' with value '%s'."  \
+                    % (self, trait_spec.name, value)
+                raise ValueError(msg)
         elif isinstance(trait_spec, traits.List):
             # This is a bit simple-minded at present, and should be
             # construed as the default. If more sophisticated behavior
