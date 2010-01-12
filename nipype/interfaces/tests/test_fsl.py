@@ -78,7 +78,7 @@ def test_bet():
         'frac':               ('-f 0.40', 0.4),
         'vertical_gradient':  ('-g 0.75', 0.75),
         'radius':             ('-r 20', 20),
-        'center':             ('-c 54 75 80', (54, 75, 80)),
+        'center':             ('-c 54 75 80', [54, 75, 80]),
         'threshold':          ('-t', True),
         'mesh':               ('-e', True),
         'verbose':            ('-v', True),
