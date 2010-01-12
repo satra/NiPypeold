@@ -329,9 +329,6 @@ class TraitedCommand(CommandLine):
         allargs.insert(0, self.cmd)
         return ' '.join(allargs)
 
-    def __init__(self, **kwargs):
-        super(TraitedCommand, self).__init__()
-
     # XXX: I don't think this is necessary in light of output_spec, raise with
     # group once feature-identical implementation is finished
     def outputs(self):
@@ -458,6 +455,22 @@ class TraitedCommand(CommandLine):
         raise NotImplementedError(
                 'Subclasses of FSLCommand must implement outputs')
 
+class TraitedAttr(traits.HasTraits):
+    """Provide a few methods necessary to support the Bunch interface.
+
+    In refactoring to Traits, the self.inputs attrs call some methods
+    of the Bunch class that the Traited classes do not inherit from
+    traits.HasTraits.  We can provide those methods here.
+
+    XXX Reconsider this in the long run, but it seems like the best
+    solution to move forward on the refactoring.
+    """
+
+    def update(self, **inputs):
+        for k, v in inputs.items():
+            setattr(self.inputs, k, v)
+
+
 class Bet(TraitedCommand):
     """Use FSL BET command for skull stripping.
 
@@ -503,7 +516,7 @@ class Bet(TraitedCommand):
         """sets base command, immutable"""
         return 'bet'
 
-    class input_spec(traits.HasTraits):
+    class input_spec(TraitedAttr):
         '''Note: Currently we don't support -R, -S, -Z,-A or -A2'''
         # We use position args here as list indices - so a negative number will
         # put something on the end
