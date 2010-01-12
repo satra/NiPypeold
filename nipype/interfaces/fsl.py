@@ -344,6 +344,9 @@ class TraitedCommand(CommandLine):
         return self.output_spec()
 
 
+    # XXX: This run method (and the one in FSLCommand) do not have the
+    # same function signature as CommandLine.run.  Is there a reason
+    # for this or is it a mistake?
     def run(self, cwd=None):
         """Execute the command.
 
@@ -468,7 +471,7 @@ class TraitedAttr(traits.HasTraits):
 
     def update(self, **inputs):
         for k, v in inputs.items():
-            setattr(self.inputs, k, v)
+            setattr(self, k, v)
 
 
 class Bet(TraitedCommand):
