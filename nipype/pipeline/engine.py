@@ -4,6 +4,7 @@ The `Pipeline` class provides core functionality for batch processing.
 """
 
 import os
+import pwd
 import sys
 from copy import deepcopy
 from time import sleep, strftime
@@ -175,8 +176,20 @@ class Pipeline(object):
             warn("Module %s has no %sput called %s\n"%(c[1],c[0],c[2]))
         if not_found:
             raise Exception('Some connections were not found')
-        self._graph.add_edges_from([(u, v, {'connect':d}) 
-                                    for u, v, d in connection_list])
+        for u, v, d in connection_list:
+            edge_data = self._graph.get_edge_data(u,v,None)
+            if edge_data:
+                logger.debug('(%s, %s): Edge data exists: %s' % \
+                                 (u, v, str(edge_data)))
+                for data in d:
+                    if data not in edge_data['connect']:
+                        edge_data['connect'].append(data)
+                self._graph.add_edges_from([(u, v, edge_data)])
+            else:
+                logger.debug('(%s, %s): No edge data' % (u, v))
+                self._graph.add_edges_from([(u, v, {'connect':d})])
+            edge_data = self._graph.get_edge_data(u,v,None)
+            logger.debug('(%s, %s): new edge data: %s'% (u, v, str(edge_data)))
 
     def add_nodes(self,nodes):
         """ Wraps the networkx functionality in a more semantically
@@ -194,6 +207,7 @@ class Pipeline(object):
 
         Ensures that edge info is pickleable.
         """
+        logger.debug('creating pickleable graph')
         S = deepcopy(graph)
         for e in S.edges():
             data = S.get_edge_data(*e)
@@ -204,7 +218,71 @@ class Pipeline(object):
                 S.add_edge(e[0], e[1])
         return S
 
-    def export_graph(self, show = True, use_execgraph=False, show_connectinfo=False, dotfilename='graph.dot'):
+    def _write_detailed_dot(self, graph, dotfilename):
+        """Create a dot file with connection info
+        
+        digraph structs {
+        node [shape=record];
+        struct1 [label="<f0> left|<f1> mid\ dle|<f2> right"];
+        struct2 [label="<f0> one|<f1> two"];
+        struct3 [label="hello\nworld |{ b |{c|<here> d|e}| f}| g | h"];
+        struct1:f1 -> struct2:f0;
+        struct1:f0 -> struct2:f1;
+        struct1:f2 -> struct3:here;
+        }
+        """
+        text = ['digraph structs {','node [shape=record];']
+        # write nodes
+        edges = []
+        replacefunk = lambda x: x.replace('_','').replace('.','').replace('@','').replace('-','')
+        for n in graph.nodes():
+            nodename = str(n)
+            inports = []
+            for u,v,d in graph.in_edges_iter(nbunch=n,data=True):
+                for cd in d['connect']:
+                    if isinstance(cd[0],str):
+                        outport = cd[0]
+                    else:
+                        outport = cd[0][0]
+                    inport = cd[1]
+                    ipstrip = replacefunk(inport)
+                    opstrip = replacefunk(outport)
+                    edges.append('%s:%s -> %s:%s;'%(str(u).replace('.',''),opstrip,
+                                                   str(v).replace('.',''),ipstrip))
+                    if inport not in inports:
+                        inports.append(inport)
+            inputstr = '{IN'
+            for ip in inports:
+                inputstr += '|<%s> %s'%(replacefunk(ip),ip)
+            inputstr += '}'
+            outports = []
+            for u,v,d in graph.out_edges_iter(nbunch=n,data=True):
+                for cd in d['connect']:
+                    if isinstance(cd[0],str):
+                        outport = cd[0]
+                    else:
+                        outport = cd[0][0]
+                    if outport not in outports:
+                        outports.append(outport)
+            outputstr = '{OUT'
+            for op in outports:
+                outputstr += '|<%s> %s'%(replacefunk(op),op)
+            outputstr += '}'
+            text += ['%s [label="%s|%s|%s"];'%(nodename.replace('.',''),
+                                               inputstr,
+                                               nodename,
+                                               outputstr)]
+        # write edges
+        for e in edges:
+            text.append(e)
+        text.append('}')
+        fp = open(dotfilename,'wt')
+        fp.write('\n'.join(text))
+        fp.close()
+        return text
+        
+        
+    def export_graph(self, show = False, use_execgraph=False, show_connectinfo=False, dotfilename='graph.dot'):
         """ Displays the graph layout of the pipeline
 
         This function requires that pygraphviz and matplotlib are available on
@@ -212,6 +290,11 @@ class Pipeline(object):
 
         Parameters
         ----------
+
+        show : boolean
+            Indicate whether to generate pygraphviz output fromn
+            networkx. default [False]
+            
         use_execgraph : boolean
             Indicates whether to use the specification graph or the
             execution graph. default [False]
@@ -226,14 +309,24 @@ class Pipeline(object):
         else:
             S = deepcopy(self._graph)
             logger.debug('using input graph')
+        outfname = fname_presuffix(dotfilename,
+                                      suffix='_detailed.dot',
+                                      use_ext=False,
+                                      newpath=self.config['workdir'])
+        logger.info('Creating detailed dot file: %s'%outfname)
+        self._write_detailed_dot(S,outfname)
+        cmd = 'dot -Tpng -O %s'%outfname
+        res = CommandLine(cmd).run()
+        if res.runtime.returncode:
+            logger.warn('dot2png: %s',res.runtime.stderr)
         S = self._create_pickleable_graph(S, show_connectinfo)
-        dotfilename = fname_presuffix(dotfilename,
+        outfname = fname_presuffix(dotfilename,
                                       suffix='.dot',
                                       use_ext=False,
                                       newpath=self.config['workdir'])
-        nx.write_dot(S, dotfilename)
-        logger.info('Creating dot file: %s'%dotfilename)
-        cmd = 'dot -Tpng -O %s'%dotfilename
+        nx.write_dot(S, outfname)
+        logger.info('Creating dot file: %s'%outfname)
+        cmd = 'dot -Tpng -O %s'%outfname
         res = CommandLine(cmd).run()
         if res.runtime.returncode:
             logger.warn('dot2png: %s',res.runtime.stderr)
@@ -282,6 +375,7 @@ class Pipeline(object):
             if callable(sourceinfo[1]):
                 val = sourceinfo[1](source.get_output(sourceinfo[0]),
                                     *sourceinfo[2:])
+        logger.debug('setting input: %s->%s',param,str(val))
         node.set_input(param, deepcopy(val))
 
     def run_in_series(self, updatehash=False, force_execute=[]):
@@ -315,12 +409,13 @@ class Pipeline(object):
             # For a disk node, provide it with an appropriate
             # output directory
             self._set_output_directory_base(node)
-            if updatehash and not (node.name in force_execute):
+            redo = any([node.name.lower()==l.lower() for l in force_execute])
+            if updatehash and not redo:
                 node.run(updatehash=updatehash)
             else:
                 try:
                     old_wd = os.getcwd()
-                    node.run()
+                    node.run(force_execute=redo)
                 except:
                     os.chdir(old_wd)
                     # bare except, but i really don't know where a
@@ -336,8 +431,9 @@ class Pipeline(object):
         exceptionType, exceptionValue, exceptionTraceback = sys.exc_info()
         traceback = repr(format_tb(exceptionTraceback))
         timeofcrash = strftime('%Y%m%d-%H%M%S')
+        login_name = pwd.getpwuid(os.geteuid())[0]
         crashfile = 'crashdump-%s-%s.npz'%(timeofcrash,
-                                           os.getlogin())
+                                           login_name)
         if self.config['crashdump_dir']:
             crashfile = os.path.join(self.config['crashdump_dir'],
                                      crashfile)

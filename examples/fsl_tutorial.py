@@ -41,7 +41,7 @@ package_check('IPython', '0.10', 'tutorial1')
 
 # Tell fsl to generate all output in uncompressed nifti format
 print fsl.fsl_info.version
-fsl.fsl_info.outputtype('NIFTI')
+fsl.fsl_info.outputtype('NIFTI_GZ')
 
 
 """
@@ -240,7 +240,7 @@ modelspec.inputs.high_pass_filter_cutoff = 120
 """
 level1design = nw.NodeWrapper(interface=fsl.Level1Design(),diskbased=True)
 level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
-level1design.inputs.bases              = {'hrf':{'derivs': False}}
+level1design.inputs.bases              = {'hrf':{'derivs': True}}
 level1design.inputs.contrasts          = contrasts
 
 """
@@ -256,6 +256,8 @@ modelgen.iterfield = ['fsf_file']
 """
 modelestimate = nw.NodeWrapper(interface=fsl.FilmGLS(),diskbased=True)
 modelestimate.inputs.thresh = 10
+modelestimate.inputs.sa = True
+modelestimate.inputs.ms = 5
 modelestimate.iterfield = ['designfile','infile']
 
 """
@@ -339,6 +341,7 @@ l1pipeline.connect([(datasource,datasink,[('subject_id','subject_id')]),
                         [('outfile', 'registration.@outfile')]),
                     (smoothing, datasink, 
                         [('smoothedimage', 'registration.@outfile')]),
+                    (conestimate,datasink,[('statsdir','stats')]),
                     ])
 
 
