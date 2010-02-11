@@ -58,13 +58,13 @@ fsl.fsl_info.outputtype('NIFTI_GZ')
 # The following lines create some information about location of your
 # data. 
 data_dir = os.path.abspath('data')
-subject_list = ['s1'] #, 's3']
+subject_list = ['s1']#, 's3']
 # The following info structure helps the DataSource module organize
 # nifti files into fields/attributes of a data object. With DataSource
 # this object is of type Bunch.
 info = {}
-info['s1'] = ((['f3','f5','f7','f10'],'func'),(['struct'],'struct'),(['ref'],'func_ref'))
-info['s3'] = ((['f3','f5','f7','f10'],'func'),(['struct'],'struct'),(['ref'],'func_ref'))
+info['s1'] = ((['f3','f5','f7','f10'],'func'),(['struct'],'struct'))#,(['ref'],'func_ref'))
+info['s3'] = ((['f3','f5','f7','f10'],'func'),(['struct'],'struct'))#,(['ref'],'func_ref'))
 
 ######################################################################
 # Setup preprocessing pipeline nodes
@@ -103,69 +103,28 @@ datasource.iterables = dict(subject_id=lambda:subject_list)
 
 ## from the FLIRT web doc
 
+extract_ref = nw.NodeWrapper(interface=fsl.ExtractRoi(tmin=42,
+                                                      tsize=1),
+                             name = 'middlevol.fsl',
+                             diskbased=True)
 # run FSL's bet
 # bet my_structural my_betted_structural
 skullstrip = nw.NodeWrapper(interface=fsl.Bet(mask = True,
                                               frac = 0.34),
+                            name = 'struct_bet.fsl',
                             diskbased=True)
 
 # Preprocess functionals
 motion_correct = nw.NodeWrapper(interface=fsl.McFlirt(saveplots = True),
+                                name='mcflirt.fsl',
                                 diskbased=True)
 motion_correct.iterfield = ['infile']
 
 func_skullstrip = nw.NodeWrapper(interface=fsl.Bet(functional = True),
                                  diskbased=True,
-                                 name='func_Bet.fsl')
+                                 name='func_bet.fsl')
 func_skullstrip.iterfield = ['infile']
 
-ref_skullstrip = nw.NodeWrapper(interface=fsl.Bet(), diskbased=True,
-                                name='ref_Bet.fsl')
-ref_skullstrip.inputs.update(functional = True)
-
-
-## Now for registration
-
-target_image = fsl.fsl_info.standard_image('MNI152_T1_2mm')
-
-# For structurals
-# flirt -ref ${FSLDIR}/data/standard/MNI152_T1_2mm_brain -in my_betted_structural -omat my_affine_transf.mat
-
-t1reg2std = nw.NodeWrapper(interface=fsl.Flirt(), diskbased=True)
-t1reg2std.inputs.update(reference = target_image,
-                        outmatrix = 't1reg2std.xfm')
-
-# It may seem that these should be able to be run in one step. But, then you get
-# an empty "fnirted" image.
-# they would be faster (I think) to do together, but the applywarp is super-fast
-# anyway.
-# fnirt --in=my_structural --aff=my_affine_transf.mat --cout=my_nonlinear_transf --config=T1_2_MNI152_2mm
-# applywarp --ref=${FSLDIR}/data/standard/MNI152_T1_2mm --in=my_structural --warp=my_nonlinear_transf --out
-# =my_warped_structural
-
-t1warp2std = nw.NodeWrapper(interface=fsl.Fnirt(), diskbased=True)
-t1warp2std.inputs.update(configfile = 'T1_2_MNI152_2mm',
-                         fieldcoeff_file = 't1warp2std',
-                         logfile = 't1warp2std.log')
-
-t1applywarp = nw.NodeWrapper(interface=fsl.ApplyWarp(), diskbased=True)
-t1applywarp.inputs.update(reference = target_image,
-                          outfile = 't1_warped')
-
-# For functionals - refers to some files above
-# flirt -ref my_betted_structural -in my_functional -dof 7 -omat func2struct.mat
-
-ref2t1 = nw.NodeWrapper(interface=fsl.Flirt(), diskbased=True, 
-                         name='ref_Flirt.fsl')
-ref2t1.inputs.update(outmatrix = 'ref2t1.xfm',
-                     dof = 6)
-
-# applywarp --ref=${FSLDIR}/data/standard/MNI152_T1_2mm --in=my_functional --warp=my_nonlinear_transf --premat=func2struct.mat --out=my_warped_functional
-
-funcapplywarp = nw.NodeWrapper(interface=fsl.ApplyWarp(), diskbased=True,
-                               name='func_ApplyWarp.fsl')
-funcapplywarp.iterfield = ['infile']
-funcapplywarp.inputs.update(reference = target_image)
 
 # Finally do some smoothing!
 
@@ -173,8 +132,21 @@ smoothing = nw.NodeWrapper(interface=fsl.Smooth(), diskbased=True)
 smoothing.iterfield = ['infile']
 smoothing.inputs.fwhm = 5
 
+inorm = nw.NodeWrapper(interface = fsl.ImageMaths(optstring = '-inm 10000',
+                                                suffix = '_inm',
+                                                outdatatype = 'float'),
+                       name = 'inorm.fsl',
+                       diskbased            = True)
+inorm.iterfield = ['infile']
 
-
+hpfilter = nw.NodeWrapper(interface=fsl.ImageMaths(),
+                          name='highpass.fsl',
+                          diskbased=True)
+hpcutoff = 120
+TR = 3.
+hpfilter.inputs.suffix = '_hpf'
+hpfilter.inputs.optstring = '-bptf %d -1'%(hpcutoff/TR)
+hpfilter.iterfield = ['infile']
 
 #######################################################################
 # setup analysis components
@@ -229,8 +201,8 @@ modelspec = nw.NodeWrapper(interface=model.SpecifyModel(), diskbased=True)
 modelspec.inputs.concatenate_runs        = False
 modelspec.inputs.input_units             = 'secs'
 modelspec.inputs.output_units            = 'secs'
-modelspec.inputs.time_repetition         = 3.
-modelspec.inputs.high_pass_filter_cutoff = 120
+modelspec.inputs.time_repetition         = TR
+modelspec.inputs.high_pass_filter_cutoff = hpcutoff
 
 
 """
@@ -239,35 +211,25 @@ modelspec.inputs.high_pass_filter_cutoff = 120
 """
 level1design = nw.NodeWrapper(interface=fsl.Level1Design(),diskbased=True)
 level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
-level1design.inputs.bases              = {'hrf':{'derivs': True}}
-level1design.inputs.contrasts          = contrasts
+level1design.inputs.bases = {'hrf':{'derivs': True}}
+level1design.inputs.contrasts = contrasts
+level1design.inputs.reg_image = fsl.fsl_info.standard_image('MNI152_T1_2mm_brain.nii.gz')
+level1design.inputs.reg_dof = 12 
 
 """
    e. Use :class:`nipype.interfaces.fsl.FeatModel` to generate a
    run specific mat file for use by FilmGLS
 """
-modelgen = nw.NodeWrapper(interface=fsl.FeatModel(),diskbased=True)
-modelgen.iterfield = ['fsf_file']
-
 featmodel = nw.NodeWrapper(interface=fsl.Feat(),diskbased=True)
 featmodel.iterfield = ['fsf_file']
 
-"""
-   f. Use :class:`nipype.interfaces.fsl.FilmGLS` to estimate a model
-   specified by a mat file and a functional run
-"""
-modelestimate = nw.NodeWrapper(interface=fsl.FilmGLS(),diskbased=True)
-modelestimate.inputs.thresh = 10
-modelestimate.inputs.sa = True
-modelestimate.inputs.ms = 5
-modelestimate.iterfield = ['designfile','infile']
+fedesign = nw.NodeWrapper(interface=fsl.FixedEffectsModel(num_copes=2),diskbased=True)
 
-"""
-   f. Use :class:`nipype.interfaces.fsl.ContrastMgr` to estimate
-   contrasts
-"""
-conestimate = nw.NodeWrapper(interface=fsl.ContrastMgr(),diskbased=True)
-conestimate.iterfield = ['tconfile','statsdir']
+featfemodel = nw.NodeWrapper(interface=fsl.Feat(),
+                             name='FixedEffects.feat',
+                             diskbased=True)
+
+
 
 ##########################
 # Setup storage of results
@@ -286,42 +248,29 @@ l1pipeline = pe.Pipeline()
 l1pipeline.config['workdir'] = os.path.abspath('./fsl/workingdir')
 l1pipeline.config['use_parameterized_dirs'] = True
 
+def pickfirst(files):
+    return files[0]
+
 l1pipeline.connect([# preprocessing in native space
-                 (datasource, skullstrip,[('struct','infile')]),
-                 (datasource, motion_correct, 
-                     [('func', 'infile'), ('func_ref', 'reffile')]),
-                 (motion_correct, func_skullstrip,
-                     [('outfile', 'infile')]),
-                 (datasource, ref_skullstrip, [('func_ref', 'infile')]),
-                 # T1 registration
-                 (skullstrip, t1reg2std,[('outfile', 'infile')]),
-                 (datasource, t1warp2std,[('struct', 'infile')]),
-                 (t1reg2std, t1warp2std, [('outmatrix', 'affine')]),
-                 (t1warp2std, t1applywarp, 
-                     [('fieldcoeff_file', 'fieldfile')]),
-                 # It would seem a little more parsimonious to get this from
-                 # t1warp2std, but it's only an input there...
-                 (datasource, t1applywarp, [('struct', 'infile')]),
-                 # Functional registration
-                 (ref_skullstrip, ref2t1, [('outfile', 'infile')]),
-                 (skullstrip, ref2t1, [('outfile', 'reference')]),
-                 (ref2t1, funcapplywarp, [('outmatrix', 'premat')]),
-                 (t1warp2std, funcapplywarp,
-                      [('fieldcoeff_file', 'fieldfile')]),
-                 (func_skullstrip, funcapplywarp, [('outfile', 'infile')]),
+                 (datasource, skullstrip, [('struct','infile')]),
+                 (datasource, motion_correct, [('func', 'infile')]),
+                 (datasource, extract_ref, [(('func', pickfirst), 'infile')]),
+                 (extract_ref, motion_correct,[('outfile', 'reffile')]),
+                 (motion_correct, func_skullstrip, [('outfile', 'infile')]),
                  # Smooth :\
-                 (funcapplywarp, smoothing, [('outfile', 'infile')]),
+                 (func_skullstrip, smoothing, [('outfile', 'infile')]),
+                 #(smoothing,inorm,[('smoothedimage','infile')]),
+                 #(inorm,hpfilter,[('outfile','infile')]),
+                 (smoothing,hpfilter,[('smoothedimage','infile')]),
                  # Model design
+                 (hpfilter,modelspec,[('outfile','functional_runs')]),
                  (datasource,modelspec,[('subject_id','subject_id'),
                                         (('subject_id',subjectinfo),'subject_info_func')]),
                  (motion_correct,modelspec,[('parfile','realignment_parameters')]),
-                 (smoothing,modelspec,[('smoothedimage','functional_runs')]),
                  (modelspec,level1design,[('session_info','session_info')]),
                  (level1design,featmodel,[('fsf_files','fsf_file')]),
-                 #(level1design,modelestimate,[('func_files','infile')]),
-                 #(modelgen,modelestimate,[('designfile','designfile')]),
-                 #(modelgen,conestimate,[('confile','tconfile')]),
-                 #(modelestimate,conestimate,[('statsdir','statsdir')]),
+                 (featmodel,fedesign,[('featdir','feat_dirs')]),
+                 (fedesign,featfemodel,[('fsf_file','fsf_file')]),
                 ])
 
 # store relevant outputs from various stages of preprocessing
@@ -332,18 +281,10 @@ l1pipeline.connect([(datasource,datasink,[('subject_id','subject_id')]),
                         [('outfile', 'skullstrip.@outfile')]),
                     (motion_correct, datasink,
                         [('parfile', 'skullstrip.@parfile')]),
-                    # We aren't really going to look at these, are we?
-                    # (t1reg2std, datasink, 
-                    #     [('outmatrix', 'registration.@outmatrix')]),
-                    # (t1warp2std, datasink, 
-                    #     [('fieldcoeff_file', 'registration.@fieldcoeff_file')]),
-                    (t1applywarp, datasink,
-                        [('outfile', 'registration.@outfile')]),
-                    (funcapplywarp, datasink,
-                        [('outfile', 'registration.@outfile')]),
                     (smoothing, datasink, 
                         [('smoothedimage', 'registration.@outfile')]),
-                    #(conestimate,datasink,[('statsdir','stats')]),
+                    (featfemodel, datasink, 
+                        [('featdir', 'modelestimate.@fixedeffects')]),
                     ])
 
 

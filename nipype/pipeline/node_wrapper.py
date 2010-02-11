@@ -9,7 +9,8 @@ from shutil import rmtree
 from tempfile import mkdtemp
 
 from nipype.utils.filemanip import (copyfiles, fname_presuffix,
-                                    filename_to_list, list_to_filename)
+                                    filename_to_list, list_to_filename,
+                                    fnames_presuffix)
 from nipype.interfaces.base import Bunch, InterfaceResult, CommandLine
 from nipype.interfaces.fsl import FSLCommand
 from nipype.utils.filemanip import save_json
@@ -18,9 +19,8 @@ import nipype.pipeline.engine as pe
 logger = logging.getLogger('nodewrapper')
 
 class NodeWrapper(object):
-    """
-    Base class wrapper for interface objects to create nodes that can
-    be used in the pipeline engine.
+    """Wraps interface objects for use in pipeline
+    
 
     Parameters
     ----------
@@ -163,7 +163,6 @@ class NodeWrapper(object):
     def run(self,updatehash=None,force_execute=False):
         """Executes an interface within a directory.
         """
-        # print "\nInputs:\n" + str(self.inputs) +"\n"
         # check to see if output directory and hash exist
         logger.info("Node: %s"%self.id)
         if self.disk_based:
@@ -183,23 +182,13 @@ class NodeWrapper(object):
                     logger.debug("Removing old %s and its contents"%outdir)
                     rmtree(outdir)
                     outdir = self._make_output_dir(outdir)
-                # copy files over and change the inputs
-                if hasattr(self._interface,'get_input_info'):
-                    for info in self._interface.get_input_info():
-                        files = self.inputs.get(info.key)
-                        if files is not None:
-                            infiles = filename_to_list(files)
-                            newfiles = copyfiles(infiles, [outdir], copy=info.copy)
-                            setattr(self.inputs, info.key, list_to_filename(newfiles))
                 self._run_interface(execute=True, cwd=outdir)
                 if isinstance(self._result.runtime, list):
                     # XXX In what situation is runtime ever a list?
                     # Normally it's a Bunch.
                     # Ans[SG]: Runtime is a list when we are iterating
                     # over an input field using iterfield 
-                    returncode = 0
-                    for r in self._result.runtime:
-                        returncode = max(r.returncode, returncode)
+                    returncode = max([r.returncode for r in self._result.runtime])
                 else:
                     returncode = self._result.runtime.returncode
                 if returncode == 0:
@@ -208,27 +197,14 @@ class NodeWrapper(object):
                     msg = "Could not run %s" % self.name
                     msg += "\nwith inputs:\n%s" % self.inputs
                     msg += "\n\tstderr: %s" % self._result.runtime.stderr
-                    raise StandardError(msg)
+                    raise RuntimeError(msg)
             else:
                 logger.debug("Hashfile exists. Skipping execution\n")
-                # change the inputs
-                if hasattr(self._interface,'get_input_info'):
-                    for info in self._interface.get_input_info():
-                        files = self.inputs.get(info.key)
-                        if files is not None:
-                            infiles = filename_to_list(files)
-                            for i,f in enumerate(infiles):
-                                newfile = fname_presuffix(f, newpath=outdir)
-                                if isinstance(files,list):
-                                    self.inputs.get(info.key)[i] = newfile
-                                else:
-                                    setattr(self.inputs, info.key, newfile)
                 self._run_interface(execute=False, cwd=outdir)
         else:
             self._run_interface(execute=True)
         return self._result
 
-    # XXX This function really seriously needs to check returncodes and similar
     def _run_interface(self, execute=True, cwd=None):
         old_cwd = os.getcwd()
         if cwd:
@@ -252,7 +228,12 @@ class NodeWrapper(object):
             self._result = InterfaceResult(interface=[], runtime=[],
                                            outputs=Bunch())
             logger.info("Iterfields: %s"%str(self.iterfield))
-            for i,v in enumerate(itervals[self.iterfield[0]]):
+            for i in range(len(itervals[self.iterfield[0]])):
+                logger.debug("%s : Iteration %02d\n"%(self.name, i))
+                for field,val in itervals.items():
+                    setattr(self.inputs, field, val[i])
+                    logger.debug("Field : %s val : %s\n"%(field,
+                                                          val[i]))
                 if self.disk_based:
                     subdir = os.path.join(basewd,'%s_%d'%(self.iterfield[0], i))
                     if not os.path.exists(subdir):
@@ -260,15 +241,6 @@ class NodeWrapper(object):
                     os.chdir(subdir)
                     cwd = subdir
                     logger.debug("subdir: %s"%subdir)
-                for field in self.iterfield:
-                    newval = itervals[field][i]
-                    if self.disk_based:
-                        newval = list_to_filename(copyfiles(newval, [subdir],
-                                                            copy=False))
-                    self.set_input(field, newval)
-                    logger.debug("iterating %s on %s: %s\n"%(self.name,
-                                                             field,
-                                                             newval))
                 result = self._run_command(execute, cwd)
                 if execute:
                     self._result.interface.insert(i, result.interface)
@@ -297,6 +269,7 @@ class NodeWrapper(object):
             os.chdir(old_cwd)
             
     def _run_command(self, execute, cwd):
+        self._copyfiles_to_wd(cwd,execute)
         if execute:
             if issubclass(self._interface.__class__,CommandLine):
                 cmd = self._interface.cmdline
@@ -306,8 +279,9 @@ class NodeWrapper(object):
                 fd.writelines(cmd)
                 fd.close()
             logger.info('Executing node')
-            result = self._interface.run(cwd=cwd)
+            result = self._interface.run()
             if result.runtime.returncode:
+                logger.error(result.runtime.stderr)
                 raise RuntimeError(result.runtime.stderr)
         else:
             # Likewise, cwd could go in here
@@ -317,7 +291,21 @@ class NodeWrapper(object):
                                      runtime=None,
                                      outputs=aggouts)
         return result
-        
+    
+    def _copyfiles_to_wd(self, outdir, execute):
+        """ copy files over and change the inputs"""
+        if hasattr(self._interface,'get_input_info') and self.disk_based:
+            for info in self._interface.get_input_info():
+                files = self.inputs.get(info.key)
+                if files:
+                    infiles = filename_to_list(files)
+                    if execute:
+                        newfiles = copyfiles(infiles, [outdir], copy=info.copy)
+                    else:
+                        newfiles = fnames_presuffix(infiles, newpath=outdir)
+                    if not isinstance(files, list):
+                        newfiles = list_to_filename(newfiles)
+                    setattr(self.inputs, info.key, newfiles)
 
     def update(self, **opts):
         self.inputs.update(**opts)

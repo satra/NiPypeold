@@ -154,7 +154,7 @@ class DicomDirInfo(FSLCommand):
             allargs.extend(['--o', self._get_outfile_name()])
         return allargs
     
-    def run(self, dicomdir=None, cwd=None, **inputs):
+    def run(self, dicomdir=None, **inputs):
         """Execute the command.
         """
         if dicomdir:
@@ -162,8 +162,6 @@ class DicomDirInfo(FSLCommand):
         if not self.inputs.dicomdir:
             raise AttributeError('DicomDirInfo requires a dicomdir input')
         self.inputs.update(**inputs)
-        if cwd:
-            os.chdir(cwd)
         return super(DicomDirInfo, self).run()
 
     def outputs(self):
@@ -198,7 +196,6 @@ class DicomConvert(FSCommandLine):
     >>> cvt = freesurfer.DicomConvert()
     >>> cvt.inputs.dicomdir = '/incoming/TrioTim-35115-2009-1900-123456/'
     >>> cvt.inputs.file_mapping = [('nifti','*.nii'),('info','dicom*.txt'),('dti','*dti.bv*')]
-    >>> cvt.run()
 
    """
     @property
@@ -335,7 +332,7 @@ class DicomConvert(FSCommandLine):
         outdir = self._get_outdir()
         cmd = []
         if not os.path.exists(outdir):
-            cmdstr = 'mkdir %s' % outdir
+            cmdstr = 'python -c "import os; os.makedirs(\'%s\')";' % outdir
             cmd.extend([cmdstr])
         infofile = os.path.join(outdir, 'shortinfo.txt')
         if not os.path.exists(infofile):
@@ -477,9 +474,11 @@ class Dicom2Nifti(FSCommandLine):
         outdir = self._get_outdir()
         cmd = []
         if not os.path.exists(outdir):
-            cmdstr = 'mkdir %s;' % outdir
+            cmdstr = 'python -c "import os; os.makedirs(\'%s\')";' % outdir
             cmd.extend([cmdstr])
-        cmdstr = 'dcmdir-info-mgh %s > %s;' % (self.inputs.dicomdir,os.path.join(outdir,'dicominfo.txt'))
+        dicominfotxt = os.path.join(outdir,'dicominfo.txt')
+        if not os.path.exists(dicominfotxt):
+            cmdstr = 'dcmdir-info-mgh %s > %s;' % (self.inputs.dicomdir, dicominfotxt)
         cmd.extend([cmdstr])
         for f in valid_inputs['dicomfiles']:
             head,fname = os.path.split(f)
@@ -764,6 +763,7 @@ class ApplyVolTransform(FSLCommand):
         'tkreg':              '--reg %s',
         'fslreg':             '--fsl %s',
         'xfmreg':             '--xfm %s',
+        'interp':             '--interp %s',
         'noresample':         '--no-resample',
         'inverse':            '--inv', 
         'flags':              '%s'}
@@ -827,9 +827,9 @@ class Smooth(FSLCommand):
     Examples
     --------
     >>> from nipype.interfaces.freesurfer import Smooth
-    >>> smoothvol = Smooth(sourcefile='foo.nii', regfile='reg.dat', surface_fwhm=10, vol_fwhm=6)
+    >>> smoothvol = Smooth(sourcefile='foo.nii', outfile = 'foo_out.nii', regfile='reg.dat', surface_fwhm=10, vol_fwhm=6)
     >>> smoothvol.cmdline
-    'mris_volsmooth --reg reg.dat --i foo.nii --fwhm 10 --vol-fwhm 6 --o foo_surfsmooth.nii'
+    'mris_volsmooth --o foo_out.nii --reg reg.dat --i foo.nii --fwhm 10 --vol-fwhm 6'
     
    """
 
@@ -976,7 +976,8 @@ class SurfConcat(FSLCommand):
             outputs.outfile = outfile[0]
         return outputs
 
-class OneSampleTTest(FSLCommand):
+    
+class GlmFit(FSLCommand):
     """Use FreeSurfer mri_glmfit to prepare a group of contrasts for
     a second level analysis
     
@@ -1001,18 +1002,18 @@ class OneSampleTTest(FSLCommand):
         print get_doc(self.cmd, self.opt_map, trap_error=False)
 
     opt_map = {
-        'surf':             '--surf %s',
+        'surf':               '--surf %s',
         'hemi':               '%s',
         'outdir':             '--glmdir %s',
-        'outdirprefix':          None,
         'funcimage':          '--y %s',
         'onesample':          '--osgm',
         'design':             '--X %s',
+        'groupfile':          '--fsgd %s',
         'flags':              '%s'}
 
     def _parse_inputs(self):
         """validate fs onesamplettest options"""
-        allargs = super(OneSampleTTest, self)._parse_inputs(skip=('surf','hemi','outdir','outdirprefix',))
+        allargs = super(GlmFit, self)._parse_inputs(skip=('surf','hemi','outdir',))
 
         # Add outfile to the args if not specified
         allargs.extend(['--surf',self.inputs.surf,self.inputs.hemi])
@@ -1024,7 +1025,7 @@ class OneSampleTTest(FSLCommand):
     def run(self, **inputs):
         """Execute the command.
         """
-        return super(OneSampleTTest, self).run()
+        return super(GlmFit, self).run()
 
     def outputs(self):
         """
@@ -1034,6 +1035,14 @@ class OneSampleTTest(FSLCommand):
     def aggregate_outputs(self):
         return self.outputs()
         
+class OneSampleTTest(GlmFit):
+    opt_map = {
+        'surf':               '--surf %s',
+        'hemi':               '%s',
+        'outdir':             '--glmdir %s',
+        'funcimage':          '--y %s',
+        'onesample':          '--osgm',
+        'flags':              '%s'}
 
 class Threshold(FSLCommand):
     """Use FreeSurfer mri_binarize to threshold an input volume
@@ -1146,10 +1155,10 @@ class Concatenate(FSLCommand):
 
     Examples
     --------
-    >>> from nipype.interfaces.freesurfer import MRI_Concat
-    >>> binvol = MRI_Concat(infile='foo.nii', min=10, outfile='foo_out.nii')
-    >>> binvol.cmdline
-    'mri_concat --i foo.nii --min 10.000000 --o foo_out.nii'
+    >>> from nipype.interfaces.freesurfer import Concatenate
+    >>> concat = Concatenate(invol='foo.nii', mean=True, outvol='foo_out.nii')
+    >>> concat.cmdline
+    'mri_concat --mean --o foo_out.nii --i foo.nii'
     
    """
 
@@ -1201,9 +1210,9 @@ class Concatenate(FSLCommand):
         return info
 
     def _get_outfile(self):
-        outfile = self.inputs.outfile
+        outfile = self.inputs.outvol
         if not outfile:
-            outfile = fname_presuffix(self.inputs.infile,
+            outfile = fname_presuffix(self.inputs.invol,
                                       suffix='_concat',
                                       newpath=os.getcwd())
         return outfile
@@ -1212,10 +1221,10 @@ class Concatenate(FSLCommand):
         """validate fs mri_concat options"""
         allargs = super(Concatenate, self)._parse_inputs(skip=('invol'))
 
-        # Add infile and outfile to the args if they are specified
+        # Add invol and outvol to the args if they are specified
         for f in filename_to_list(self.inputs.invol):
             allargs.extend(['--i', f])
-        if not self.inputs.outfile and self.inputs.infile:
+        if not self.inputs.outvol and self.inputs.invol:
             allargs.extend(['--o',self._get_outfile()])
         return allargs
     
@@ -1234,10 +1243,10 @@ class Concatenate(FSLCommand):
 
     def aggregate_outputs(self):
         outputs = self.outputs()
-        if isinstance(self.inputs.outfile,str):
-            outfile = glob(self.inputs.outfile)
+        if isinstance(self.inputs.outvol,str):
+            outfile = glob(self.inputs.outvol)
             outputs.outfile = outfile[0]
-        elif not self.inputs.outfile and self.inputs.infile:
+        elif not self.inputs.outvol and self.inputs.invol:
             outfile = glob(self._get_outfile())
             outputs.outfile = outfile[0]
         return outputs
@@ -1255,9 +1264,9 @@ class SegStats(FSLCommand):
     Examples
     --------
     >>> from nipype.interfaces.freesurfer import SegStats
-    >>> binvol = SegStats(infile='foo.nii', min=10, outfile='foo_out.nii')
-    >>> binvol.cmdline
-    'mri_segstats --i foo.nii --min 10.000000 --o foo_out.nii'
+    >>> segstat = SegStats(segvol='seg.nii', invol='foo.nii', segid=18, sumfile='foo_sum.txt')
+    >>> segstat.cmdline
+    'mri_segstats --i foo.nii --seg seg.nii --id 18 --sum foo_sum.txt'
     
    """
 
@@ -1286,7 +1295,7 @@ class SegStats(FSLCommand):
                'ctab_default': '--ctab-default',
                'ctab_gca': '--ctab-gca',
                'segid': '--id %s',
-               'excludeid': '--exclueid %s',
+               'excludeid': '--excludeid %s',
                'excl_ctxgmwm': '--excl-ctxgmwm',
                'surf_wm_vol': '--surf-wm-vol',
                'surf_ctx_vol': '--surf-ctx-vol',
@@ -1304,26 +1313,51 @@ class SegStats(FSLCommand):
                'avgwftxt': '--avgwf %s',
                'avgwfvol': '--avgwfvol %s',
                'savgmsf' : '--sfavg %s',		
-               'vox': '--vox ***',
+               'vox': '--vox %d %d %d',
                'flags': '%s'}
     
     def get_input_info(self):
         """ Provides information about inputs as a dict
             info = [Bunch(key=string,copy=bool,ext='.nii'),...]
         """
-        info = [Bunch(key='infile',copy=False)]
+        info = [Bunch(key='invol',copy=False)]
         return info
     
     def _parse_inputs(self):
         """validate fs mri_segstats options"""
-        allargs = super(SegStats, self)._parse_inputs()
+        allargs = super(SegStats, self)._parse_inputs(skip=('sumfile','segid','avgwftxt','avgwfvol'))
 
-        # Add infile and outfile to the args if they are specified
-        if not self.inputs.outfile and self.inputs.infile:
-            allargs.extend(['--avgwf',fname_presuffix(self.inputs.infile,
-                                                  suffix='_avgwf',
-                                                  newpath=os.getcwd())])
-        
+        # Add invol to the args if they are specified
+        if self.inputs.segid:
+            if isinstance(self.inputs.segid,list):
+                for id in self.inputs.segid:
+                    allargs.extend(['--id', str(id)])
+            else:
+                allargs.extend(['--id', str(self.inputs.segid)])
+        if self.inputs.invol:
+            if isinstance(self.inputs.sumfile,str):
+                allargs.extend(['--sum',self.inputs.sumfile])
+            else:
+                allargs.extend(['--sum',fname_presuffix(self.inputs.invol,
+                                                          suffix='_summary.txt',
+                                                          use_ext=False,
+                                                          newpath=os.getcwd())])
+        if self.inputs.avgwftxt and self.inputs.invol:
+            if isinstance(self.inputs.avgwftxt,str):
+                allargs.extend(['--avgwf',self.inputs.avgwftxt])
+            else:
+                allargs.extend(['--avgwf',fname_presuffix(self.inputs.invol,
+                                                          suffix='_avgwf.txt',
+                                                          use_ext=False,
+                                                          newpath=os.getcwd())])
+        if self.inputs.avgwfvol and self.inputs.invol:
+            if isinstance(self.inputs.avgwfvol,str):
+                allargs.extend(['--avgwfvol',self.inputs.avgwfvol])
+            else:
+                allargs.extend(['--avgwfvol',fname_presuffix(self.inputs.invol,
+                                                          suffix='_avgwfvol.nii.gz',
+                                                          use_ext=False,
+                                                          newpath=os.getcwd())])
         return allargs
     
     def run(self, **inputs):
@@ -1336,16 +1370,104 @@ class SegStats(FSLCommand):
         outfile: filename
               output file
         """
+        outputs = Bunch(sumfile=None,
+                        avgwffile=None,
+                        avgwfvol=None)
+        return outputs
+
+    def aggregate_outputs(self):
+        outputs = self.outputs()
+        return outputs
+
+class Label2Vol(FSLCommand):
+    """Make a binary volume from a Freesurfer label
+
+    Parameters
+    ----------
+
+    To see optional arguments
+    Label2Vol().inputs_help()
+
+
+    Examples
+    --------
+    >>> from nipype.interfaces.freesurfer import Label2Vol
+    >>> binvol = Label2Vol(label='foo.label', templatevol='bar.nii', regmat='foo_reg.dat',fillthresh=0.5,outvol='foo_out.nii')
+    >>> binvol.cmdline
+    'mri_label2vol --fillthresh 0.500000 --label foo.label --o foo_out.nii --reg foo_reg.dat --temp bar.nii'
+    
+   """
+
+    @property
+    def cmd(self):
+        """sets base command, not editable"""
+        return 'mri_label2vol'
+
+
+    def inputs_help(self):
+        """Print command line documentation for mri_label2vol."""
+        print get_doc(self.cmd, self.opt_map, trap_error=False)
+
+    opt_map = {'label': '--label %s',
+               'annotfile': '--annot %s',
+               'segpath': '--seg %s',
+               'aparc+aseg': '--aparc+aseg',
+               'templatevol': '--temp %s',
+               'regmat': '--reg %s',
+               'volid': '--regheader %s',
+               'identity': '--identity',
+               'invertmtx': '--invertmtx',
+               'fillthresh': '--fillthresh %f',
+               'voxvol': '--labvoxvol %s',
+               'proj': '--proj %s %f %f %f',
+               'subjectid': '--subject %s',
+               'hemi': '--hemi %s',
+               'outvol': '--o %s',
+               'hitvolid': '--hits %f',
+               'statvol': '--label-stat %s',
+               'native-vox2ras': '--native-vox2ras'
+               }
+    
+    def get_input_info(self):
+        """ Provides information about inputs as a dict
+            info = [Bunch(key=string,copy=bool,ext='.nii'),...]
+        """
+        info = [Bunch(key='infile',copy=False)]
+        return info
+
+    def _get_outfile(self):
+        outfile = self.inputs.outvol
+        if outfile is None:
+            outfile = fname_presuffix(self.inputs.label,
+                                      suffix='_vol.nii',
+                                      use_ext=False,
+                                      newpath=os.getcwd())
+        return outfile
+        
+    def _parse_inputs(self):
+        """validate fs mri_label2vol options"""
+        allargs = super(Label2Vol, self)._parse_inputs()
+
+        # Add infile and outfile to the args if they are specified
+        if not self.inputs.outvol and self.inputs.label:
+            allargs.extend(['--o', self._get_outfile()])
+        
+        return allargs
+    
+    def run(self, **inputs):
+        """Execute the command.
+        """
+        return super(Label2Vol, self).run()
+
+    def outputs(self):
+        """
+        outfile: filename
+              output file
+        """
         outputs = Bunch(outfile=None)
         return outputs
 
     def aggregate_outputs(self):
         outputs = self.outputs()
-        if isinstance(self.inputs.outfile,str):
-            outfile = glob(self.inputs.outfile)
-            outputs.outfile = outfile[0]
-        elif not self.inputs.outfile and self.inputs.infile:
-            outfile = glob(fname_presuffix(self.inputs.infile,
-                                           suffix='_avgwf', newpath=os.getcwd())) 
-            outputs.outfile = outfile[0]
+        outputs.outfile = glob(self._get_outfile())[0]
         return outputs
