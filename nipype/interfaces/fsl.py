@@ -534,6 +534,28 @@ class TraitedAttr(traits.HasTraits):
     flags = traits.Str(argstr='%s')
     args = traits.Str(argstr='%s')
 
+    def __init__(self, *args, **kwargs):
+        self._generate_handlers()
+        super(TraitedAttr, self).__init__(*args, **kwargs)
+
+    def _generate_handlers(self):
+        # Get all traits with the 'xor' metadata set to True and
+        # attach and event handler to them.
+        xors = self.trait_names(xor=True)
+        for elem in xors:
+            self.on_trait_change(self._xor_warn, elem)
+
+    def _xor_warn(self, name, old, new):
+        trait_spec = self.traits()[name]
+        if new:
+            xor_names = trait_spec.get_metadata('xor_names')
+            # remove our own name if in the list
+            xor_names.remove(name)
+            # for each xor, set to default_value
+            for tname in xor_names:
+                tspec = self.traits()[tname]
+                setattr(self, tname, tspec.get_default_value())
+
     def update(self, **inputs):
         for k, v in inputs.items():
             setattr(self, k, v)
@@ -608,8 +630,10 @@ class Bet(TraitedCommand):
         threshold = traits.Bool(argstr='-t')
         mesh = traits.Bool(argstr='-e')
         verbose = traits.Bool(argstr='-v')
-        functional = traits.Bool(argstr='-F')
-        reduce_bias = traits.Bool(argstr='-B')
+        functional = traits.Bool(argstr='-F', xor=True, 
+                                 xor_names=['functional', 'reduce_bias'])
+        reduce_bias = traits.Bool(argstr='-B', xor=True,
+                                  xor_names=['functional', 'reduce_bias'])
 
         # Trait handlers
         def _infile_changed(self, name, old, new):
