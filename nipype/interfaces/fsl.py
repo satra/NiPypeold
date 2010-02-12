@@ -34,6 +34,7 @@ from nipype.utils.misc import container_to_string, is_container
 
 # We are shooting for interoperability for now - Traits or Traitlets
 import nipype.externals.traitlets as traits
+# import enthought.traits.api as traits
 
 warn = warnings.warn
 warnings.filterwarnings('always', category=UserWarning)
@@ -539,9 +540,12 @@ class TraitedAttr(traits.HasTraits):
         super(TraitedAttr, self).__init__(*args, **kwargs)
 
     def _generate_handlers(self):
-        # Get all traits with the 'xor' metadata set to True and
-        # attach and event handler to them.
-        xors = self.trait_names(xor=True)
+        # Find all traits with the 'xor' metadata and attach an event
+        # handler to them.
+        def has_xor(item):
+            if is_container(item):
+                return item
+        xors = self.trait_names(xor=has_xor)
         for elem in xors:
             self.on_trait_change(self._xor_warn, elem)
 
@@ -630,10 +634,9 @@ class Bet(TraitedCommand):
         threshold = traits.Bool(argstr='-t')
         mesh = traits.Bool(argstr='-e')
         verbose = traits.Bool(argstr='-v')
-        functional = traits.Bool(argstr='-F', xor=True, 
-                                 xor_names=['functional', 'reduce_bias'])
-        reduce_bias = traits.Bool(argstr='-B', xor=True,
-                                  xor_names=['functional', 'reduce_bias'])
+        _xor_inputs = ('functional', 'reduce_bias')
+        functional = traits.Bool(argstr='-F', xor=_xor_inputs)
+        reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
 
         # Trait handlers
         def _infile_changed(self, name, old, new):
@@ -719,17 +722,17 @@ class Bet(TraitedCommand):
         'bet foo.nii bar.nii -v'
 
         """
-        self.check_mandatory_inputs()
 
         if infile:
             self.inputs.infile = infile
-        if self.inputs.infile is None:
-            raise ValueError('Bet requires an input file')
-        if isinstance(self.inputs.infile, list):
-            raise ValueError('Bet does not support multiple input files')
         if outfile:
             self.inputs.outfile = outfile
         self.inputs.update(**inputs)
+
+        self.check_mandatory_inputs()
+
+        if isinstance(self.inputs.infile, list):
+            raise ValueError('Bet does not support multiple input files')
         return super(Bet, self).run()
  
     def outputs(self):

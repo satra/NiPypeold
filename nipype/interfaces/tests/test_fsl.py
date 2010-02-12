@@ -3,7 +3,8 @@ import tempfile
 import shutil
 
 
-from nipype.testing import assert_equal, assert_not_equal, assert_true, assert_raises
+from nipype.testing import (assert_equal, assert_not_equal, assert_true, 
+                            assert_false, assert_raises)
 import nipype.interfaces.fsl as fsl
 
 def test_fslversion():
@@ -92,6 +93,14 @@ def test_bet():
         better = fsl.Bet(**{name: settings[1]})
         yield assert_equal, better.cmdline, ' '.join([better.cmd, settings[0]])
     
+    # Tests for mutually exclusive options
+    better = fsl.Bet()
+    better.inputs.functional = True
+    yield assert_false, better.inputs.reduce_bias
+    better.inputs.reduce_bias = True
+    yield assert_false, better.inputs.functional
+    better.inputs.reduce_bias = False
+    yield assert_false, better.inputs.functional
         
 # test fast
 def test_fast():
