@@ -539,6 +539,28 @@ class TraitedAttr(traits.HasTraits):
         self._generate_handlers()
         super(TraitedAttr, self).__init__(*args, **kwargs)
 
+    def __deepcopy__(self, memo):
+        # When I added the dynamic trait notifiers via
+        # on_trait_change, tests errored when the run method was
+        # called.  I would get this error: 'TypeError: instancemethod
+        # expected at least 2 arguments, got 0' and a traceback deep
+        # in the copy module triggered by the
+        # 'InterfaceResult(deepcopy(self), runtime)' line returned
+        # from CommandLine._runner.  To fix this, I create a new
+        # instance of self, then assign all traited attrs with
+        # deepcopied values.
+        id_self = id(self)
+        if id_self in memo:
+            return memo[id_self]
+        # Create new dictionary of trait items with deep copies of elements
+        dup_dict = {}
+        for key in self.traits():
+            dup_dict[key] = deepcopy(getattr(self, key), memo)
+        # create new instance and update with copied values
+        dup = self.__class__()
+        dup.update(**dup_dict)
+        return dup
+
     def _generate_handlers(self):
         # Find all traits with the 'xor' metadata and attach an event
         # handler to them.
@@ -552,13 +574,14 @@ class TraitedAttr(traits.HasTraits):
     def _xor_warn(self, name, old, new):
         trait_spec = self.traits()[name]
         if new:
-            xor_names = trait_spec.get_metadata('xor_names')
-            # remove our own name if in the list
-            xor_names.remove(name)
+            xor_names = trait_spec.get_metadata('xor')
             # for each xor, set to default_value
-            for tname in xor_names:
-                tspec = self.traits()[tname]
-                setattr(self, tname, tspec.get_default_value())
+            for trait_name in xor_names:
+                if trait_name == name:
+                    # skip ourself
+                    continue
+                tspec = self.traits()[trait_name]
+                setattr(self, trait_name, tspec.get_default_value())
 
     def update(self, **inputs):
         for k, v in inputs.items():
