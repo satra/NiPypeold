@@ -7,13 +7,14 @@ from copy import deepcopy
 import logging
 from shutil import rmtree
 from tempfile import mkdtemp
+import numpy as np
 
 from nipype.utils.filemanip import (copyfiles, fname_presuffix,
                                     filename_to_list, list_to_filename,
                                     fnames_presuffix)
 from nipype.interfaces.base import Bunch, InterfaceResult, CommandLine
 from nipype.interfaces.fsl import FSLCommand
-from nipype.utils.filemanip import save_json
+from nipype.utils.filemanip import save_json, loadflat
 import nipype.pipeline.engine as pe
 
 logger = logging.getLogger('nodewrapper')
@@ -27,9 +28,12 @@ class NodeWrapper(object):
     interface : interface object
         node specific interface  (fsl.Bet(), spm.Coregister())
     iterables : generator
-        key and items to iterate using the pipeline engine
+        input field and list to iterate using the pipeline engine
         for example to iterate over different frac values in fsl.Bet()
-        node.iterables = dict(frac=lambda:[0.5,0.6,0.7])
+        for a single field the input can be a tuple, otherwise a list
+        of tuples
+        node.iterables = ('frac',[0.5,0.6,0.7])
+        node.iterables = [('fwhm',[2,4]),('fieldx',[0.5,0.6,0.7])]
     iterfield : 1+-element list
         key(s) over which to repeatedly call the interface.
         for example, to iterate FSL.Bet over multiple files, one can
@@ -246,7 +250,7 @@ class NodeWrapper(object):
                     self._result.interface.insert(i, result.interface)
                     self._result.runtime.insert(i, result.runtime)
                 outputs = result.outputs
-                for key,val in outputs.iteritems():
+                for key,val in outputs.items():
                     try:
                         # This has funny default behavior if the length of the
                         # list is < i - 1. I'd like to simply use append... feel
@@ -270,6 +274,8 @@ class NodeWrapper(object):
             
     def _run_command(self, execute, cwd):
         self._copyfiles_to_wd(cwd,execute)
+        if self.disk_based:
+            resultsfile = os.path.join(cwd,'result.npz')
         if execute:
             if issubclass(self._interface.__class__,CommandLine):
                 cmd = self._interface.cmdline
@@ -283,13 +289,29 @@ class NodeWrapper(object):
             if result.runtime.returncode:
                 logger.error(result.runtime.stderr)
                 raise RuntimeError(result.runtime.stderr)
+            else:
+                if self.disk_based:
+                    np.savez(resultsfile,result=result)
         else:
             # Likewise, cwd could go in here
             logger.info("Collecting precomputed outputs:")
-            aggouts = self._interface.aggregate_outputs()
-            result = InterfaceResult(interface=None,
-                                     runtime=None,
-                                     outputs=aggouts)
+            if self.disk_based:
+                if os.path.exists(resultsfile):
+                    result = loadflat(resultsfile,'result')['result']
+                else:
+                    # for backwards compatibility
+                    logger.debug('result.npz not found, aggregating ' \
+                                 'and storing results')
+                    aggouts = self._interface.aggregate_outputs()
+                    result = InterfaceResult(interface=None,
+                                             runtime=None,
+                                             outputs=aggouts)
+                    np.savez(resultsfile,result=result)
+            else:
+                aggouts = self._interface.aggregate_outputs()
+                result = InterfaceResult(interface=None,
+                                         runtime=None,
+                                         outputs=aggouts)
         return result
     
     def _copyfiles_to_wd(self, outdir, execute):

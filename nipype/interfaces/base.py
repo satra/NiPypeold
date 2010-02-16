@@ -11,10 +11,10 @@ import subprocess
 from copy import deepcopy
 from string import Template
 from warnings import warn
-import copy
 
 from nipype.utils.filemanip import md5
 from nipype.utils.misc import is_container
+
  
 __docformat__ = 'restructuredtext'
 
@@ -74,9 +74,14 @@ class Bunch(object):
         Note: update is very much like HasTraits.set"""
         self.__dict__.update(*args, **kwargs)
 
+    def items(self):
+        """iterates over bunch attributes as key,value pairs"""
+        return self.__dict__.items()
+
     def iteritems(self):
         """iterates over bunch attributes as key,value pairs"""
-        return self.__dict__.iteritems()
+        warn('iteritems is deprecated, use items instead')
+        return self.items()
 
     def get(self, *args):
         '''Support dictionary get() functionality 
@@ -97,7 +102,7 @@ class Bunch(object):
         """
         outstr = ['Bunch(']
         first = True
-        for k, v in sorted(self.iteritems()):
+        for k, v in sorted(self.items()):
             if not first:
                 outstr.append(', ')
             outstr.append('%s=%r' % (k, v))
@@ -149,7 +154,7 @@ class Bunch(object):
         """
 
         infile_list = []
-        for key, val in self.iteritems():
+        for key, val in self.items():
             if is_container(val):
                 # XXX - SG this probably doesn't catch numpy arrays
                 # containing embedded file names either. 
@@ -188,7 +193,7 @@ class Bunch(object):
         else:
             p.begin_group(6, 'Bunch(')
             first = True
-            for k, v in sorted(self.iteritems()):
+            for k, v in sorted(self.items()):
                 if not first:
                     p.text(',')
                     p.breakable()
@@ -435,12 +440,22 @@ class CommandLine(Interface):
         if cwd is None:
             cwd = os.getcwd()
         runtime = Bunch(cmdline=self.cmdline, cwd=cwd)
-
-        proc  = subprocess.Popen(runtime.cmdline,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE,
-                                 shell=True,
-                                 cwd=cwd)
+        
+        if hasattr(self, 'environ') and self.environ != None:
+            env = deepcopy(os.environ.data)
+            env.update(self.environ)  
+            proc  = subprocess.Popen(runtime.cmdline,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     shell=True,
+                                     cwd=cwd,
+                                     env=env)
+        else:
+            proc  = subprocess.Popen(runtime.cmdline,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     shell=True,
+                                     cwd=cwd)
 
         runtime.stdout, runtime.stderr = proc.communicate()
         runtime.returncode = proc.returncode
@@ -456,3 +471,141 @@ class CommandLine(Interface):
             
         """
         return []
+    
+    
+class OptMapCommand(CommandLine):
+    '''Common FreeSurfer and FSL commands support'''
+    opt_map = {}
+
+    @property
+    def cmdline(self):
+        """validates fsl options and generates command line argument"""
+        allargs = self._parse_inputs()
+        allargs.insert(0, self.cmd)
+        return ' '.join(allargs)
+
+    def run(self):
+        """Execute the command.
+
+        Returns
+        -------
+        results : InterfaceResult
+            An :class:`nipype.interfaces.base.InterfaceResult` object
+            with a copy of self in `interface`
+
+        """
+        results = self._runner(cwd=os.getcwd())
+        if results.runtime.returncode == 0:
+            results.outputs = self.aggregate_outputs()
+
+        return results
+
+    def _parse_inputs(self, skip=()):
+        """Parse all inputs and format options using the opt_map format string.
+
+        Any inputs that are assigned (that are not None) are formatted
+        to be added to the command line.
+
+        Parameters
+        ----------
+        skip : tuple or list
+            Inputs to skip in the parsing.  This is for inputs that
+            require special handling, for example input files that
+            often must be at the end of the command line.  Inputs that
+            require special handling like this should be handled in a
+            _parse_inputs method in the subclass.
+
+        Returns
+        -------
+        allargs : list
+            A list of all inputs formatted for the command line.
+
+        """
+        allargs = []
+        inputs = sorted((k, v) for k, v in self.inputs.items()
+                            if v is not None and k not in skip)
+        for opt, value in inputs:
+            if opt == 'args':
+                # XXX Where is this used?  Is self.inputs.args still
+                # used?  Or is it leftover from the original design of
+                # base.CommandLine?
+                allargs.extend(value)
+                continue
+            try:
+                argstr = self.opt_map[opt]
+                if is_container(argstr):
+                    # The value in opt_map may be a tuple whose first
+                    # element is the format string and second element
+                    # a one-line docstring.  This docstring will
+                    # become the desc field in the traited version of
+                    # the code.
+                    argstr = argstr[0]
+                if argstr.find('%') == -1:
+                    # Boolean options have no format string.  Just
+                    # append options if True.
+                    if value is True:
+                        allargs.append(argstr)
+                    elif value is not False:
+                        raise TypeError('Boolean option %s set to %s' %
+                                         (opt, str(value)) )
+                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
+                    # XXX Hack to deal with special case where some
+                    # parameters to Fnirt can have a variable number
+                    # of arguments.  Splitting the argument string,
+                    # like '--infwhm=%d', then add as many format
+                    # strings as there are values to the right-hand
+                    # side.
+                    argparts = argstr.split('=')
+                    allargs.append(argparts[0] + '=' +
+                                   ','.join([argparts[1] % y for y in value]))
+                elif isinstance(value, list):
+                    allargs.append(argstr % tuple(value))
+                else:
+                    # Append options using format string.
+                    allargs.append(argstr % value)
+            except TypeError, err:
+                msg = 'Error when parsing option %s in class %s.\n%s' % \
+                    (opt, self.__class__.__name__, err.message)
+                warn(msg)
+            except KeyError:
+                warn("Option '%s' is not supported!" % (opt))
+                raise
+
+        return allargs
+
+    def _populate_inputs(self):
+        self.inputs = Bunch((k,None) for k in self.opt_map.keys())
+
+    def inputs_help(self):
+        """Print command line documentation for the command."""
+        from nipype.utils.docparse import get_doc
+        print get_doc(self.cmd, self.opt_map, '-h')
+
+    def outputs_help(self):
+        """Print the help for outputs."""
+        # XXX This function does the same for FSL and SPM, consider
+        # moving to a top-level class.
+        print self.outputs.__doc__
+
+    def aggregate_outputs(self):
+        """Create a Bunch which contains all possible files generated
+        by running the interface.  Some files are always generated, others
+        depending on which ``inputs`` options are set.
+
+        Returns
+        -------
+        outputs : Bunch object
+            Bunch object containing all possible files generated by
+            interface object.
+
+            If None, file was not generated
+            Else, contains path, filename of generated outputfile
+
+        """
+        raise NotImplementedError(
+                'Subclasses of OptMapCommand must implement aggregate_outputs')
+
+    def outputs(self):
+        """Virtual function"""
+        raise NotImplementedError(
+                'Subclasses of OptMapCommand must implement outputs')

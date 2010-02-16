@@ -9,7 +9,6 @@
 1. Tell python where to find the appropriate functions.
 """
 import os                                    # system functions
-import sys
 
 import nipype.interfaces.io as nio           # Data i/o 
 import nipype.interfaces.spm as spm          # spm
@@ -43,10 +42,10 @@ package_check('IPython', '0.10', 'tutorial1')
 """
 
 # Tell fsl to generate all output in uncompressed nifti format
-print fsl.fsl_info.version
-fsl.fsl_info.outputtype('NIFTI')
+print fsl.FSLInfo.version()
+fsl.FSLInfo.outputtype('NIFTI')
 
-fs.fssubjectsdir(os.path.abspath('fsdata'))
+fs.FSInfo.subjectsdir(os.path.abspath('fsdata'))
 
 # setup the way matlab should be called
 mlab.MatlabCommandLine.matlab_cmd = "matlab -nodesktop -nosplash"
@@ -106,7 +105,7 @@ datasource.inputs.subject_info     = info
    entire first level preprocessing and estimation will be repeated
    for each subject contained in subject_list.
 """
-datasource.iterables = dict(subject_id=lambda:subject_list)
+datasource.iterables = ('subject_id',subject_list)
 
 
 """
@@ -367,7 +366,7 @@ l2source = nw.NodeWrapper(nio.DataGrabber(),diskbased=False)
 l2source.inputs.file_template=os.path.abspath('surf/l1output/*/con*/con_%04d.img')
 l2source.inputs.template_argnames=['con']
 # iterate over all contrast images
-l2source.iterables = dict(con=lambda:contrast_ids)
+l2source.iterables = ('con',contrast_ids)
 
 l2regsource = nw.NodeWrapper(nio.DataGrabber(),diskbased=False)
 l2regsource.inputs.file_template=os.path.abspath('surf/l1output/*/surfreg/*bbreg_*.dat')
@@ -377,7 +376,7 @@ Project con image to fsaverage and concatenate
 """
 l2concat = nw.NodeWrapper(interface=fs.SurfConcat(),diskbased=True)
 l2concat.inputs.target = 'fsaverage'
-l2concat.iterables = dict(hemi=lambda:['lh','rh'])
+l2concat.iterables = ('hemi',['lh','rh'])
 
 """
   b. Use :class:`nipype.interfaces.fs.OneSampleTTest` to perform a
@@ -386,20 +385,12 @@ l2concat.iterables = dict(hemi=lambda:['lh','rh'])
 """
 # setup a 1-sample t-test node
 onesamplettest = nw.NodeWrapper(interface=fs.OneSampleTTest(),diskbased=True)
-onesamplettest.inputs.surf     ='fsaverage'
-onesamplettest.inputs.onesample = True
+onesamplettest.inputs.surf = l2concat.inputs.target
 
 """
   c. As before, we setup a pipeline to connect these two nodes
   (l2source -> onesamplettest).
 """
-def gethemi(filename):
-    path,name = os.path.split(filename)
-    if '_lh.' in name:
-        return 'lh'
-    else:
-        return 'rh'
-
 def getconname(filename):
     path,name = os.path.split(filename[0])
     name,ext = os.path.splitext(name)
@@ -416,7 +407,7 @@ l2pipeline.connect([(l2source,l2concat,[(('file_list',sort),'volimages'),
                                         (('file_list',getconname),'outprefix')]),
                     (l2regsource,l2concat,[(('file_list',sort),'volregs')]),
                     (l2concat,onesamplettest,[('outfile','funcimage'),
-                                              (('outfile',gethemi),'hemi')]),
+                                              ('hemi','hemi')]),
                     ])
 
 
@@ -434,3 +425,5 @@ l2pipeline.connect([(l2source,l2concat,[(('file_list',sort),'volimages'),
 if __name__ == '__main__':
     l1pipeline.run()
     l2pipeline.run()
+    l1pipeline.export_graph()
+    l2pipeline.export_graph()

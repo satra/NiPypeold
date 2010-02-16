@@ -11,10 +11,8 @@
 
 import nipype.interfaces.io as nio           # Data i/o 
 import nipype.interfaces.fsl as fsl          # fsl
-import nipype.interfaces.spm as spm          # spm
 import nipype.pipeline.node_wrapper as nw    # nodes for pypelines
 import nipype.pipeline.engine as pe          # pypeline engine
-import nipype.algorithms.rapidart as ra      # artifact detection
 import nipype.algorithms.modelgen as model   # model generation
 import os                                    # system functions
 
@@ -39,9 +37,9 @@ package_check('IPython', '0.10', 'tutorial1')
    required because SPM does not handle compressed NIFTI.
 """
 
-# Tell fsl to generate all output in uncompressed nifti format
-print fsl.fsl_info.version
-fsl.fsl_info.outputtype('NIFTI_GZ')
+# Tell fsl to generate all output in compressed nifti format
+print fsl.FSLInfo.version()
+fsl.FSLInfo.outputtype('NIFTI_GZ')
 
 
 """
@@ -99,7 +97,7 @@ datasource.inputs.subject_info     = info
    entire first level preprocessing and estimation will be repeated
    for each subject contained in subject_list.
 """
-datasource.iterables = dict(subject_id=lambda:subject_list)
+datasource.iterables = ('subject_id',subject_list)
 
 ## from the FLIRT web doc
 
@@ -213,7 +211,7 @@ level1design = nw.NodeWrapper(interface=fsl.Level1Design(),diskbased=True)
 level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
 level1design.inputs.bases = {'hrf':{'derivs': True}}
 level1design.inputs.contrasts = contrasts
-level1design.inputs.reg_image = fsl.fsl_info.standard_image('MNI152_T1_2mm_brain.nii.gz')
+level1design.inputs.reg_image = fsl.FSLInfo.standard_image('MNI152_T1_2mm_brain.nii.gz')
 level1design.inputs.reg_dof = 12 
 
 """

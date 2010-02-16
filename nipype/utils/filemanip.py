@@ -13,10 +13,6 @@ try:
 except ImportError:
     from md5 import md5
 
-import numpy as np
-
-from nipype.utils.misc import is_container
-
 try:
     # json included in Python 2.6
     import json
@@ -24,6 +20,10 @@ except ImportError:
     # simplejson is the json module that was included in 2.6 (I
     # believe).  Used here for Python 2.5
     import simplejson as json
+
+import numpy as np
+
+from nipype.utils.misc import is_container
 
 def fname_presuffix(fname, prefix='', suffix='', newpath=None, use_ext=True):
     """Manipulates path and name of input filename
@@ -71,26 +71,14 @@ def fnames_presuffix(fnames, prefix='', suffix='', newpath=None,use_ext=True):
         f2.append(fname_presuffix(fname, prefix, suffix, newpath, use_ext))
     return f2
 
-def md5file(filename, excludeline="", includeline=""):
-    """Compute md5 hash of the specified file"""
-    m = md5()
-    try:
-        for line in open(filename,"rb"):
-            if excludeline and line.startswith(excludeline):
-                continue
-            m.update(line)
-        return m.hexdigest()
-    except IOError:
-        print "Unable to open the file in readmode:", filename
-        
 def hash_rename(filename, hash):
     """renames a file given original filename and hash
     and sets path to output_directory
     """
     path, name = os.path.split(filename)
     name, ext = os.path.splitext(name)
-    newfilename = ''.join((name,'_0x',hash,ext))
-    return os.path.join(path,newfilename)
+    newfilename = ''.join((name,'_0x', hash, ext))
+    return os.path.join(path, newfilename)
              
 
 def check_forhash(filename):
@@ -98,20 +86,20 @@ def check_forhash(filename):
     if isinstance(filename,list):
         filename = filename[0]
     path, name = os.path.split(filename)
-    if re.search('(_0x[a-z0-9]{32})',name):
-        hash = re.findall('(_0x[a-z0-9]{32})',name)
+    if re.search('(_0x[a-z0-9]{32})', name):
+        hash = re.findall('(_0x[a-z0-9]{32})', name)
         return True, hash
     else:
         return False, None
 
 def copyfile(originalfile, newfile, copy=False):
-    """given a file moves it to a working directory
+    """Copy or symlink ``originalfile`` to ``newfile``.
 
     Parameters
     ----------
-    originalfile : file
+    originalfile : str
         full path to original file
-    newfile : file
+    newfile : str
         full path to new file
     copy : Bool
         specifies whether to copy or symlink files
@@ -125,7 +113,8 @@ def copyfile(originalfile, newfile, copy=False):
     if os.path.lexists(newfile):
         os.unlink(newfile)
         #TODO: use logging
-        print "File: %s already exists, overwriting with %s, copy:%d"%(newfile, originalfile, copy)
+        print "File: %s already exists, overwriting with %s, copy:%d" \
+            % (newfile, originalfile, copy)
     if os.name is 'posix' and not copy:
         os.symlink(originalfile,newfile)
     else:
@@ -141,12 +130,12 @@ def copyfile(originalfile, newfile, copy=False):
         copyfile(hdrofile, hdrnfile, copy)
 
 def copyfiles(filelist, dest, copy=False):
-    """given a file moves it to a working directory
+    """Copy or symlink files in ``filelist`` to ``dest`` directory.
 
     Parameters
     ----------
-    originalfile : file
-        full path to original file
+    filelist : list
+        List of files to copy.
     dest : path/files
         full path to destination. If it is a list of length greater
         than 1, then it assumes that these are the names of the new

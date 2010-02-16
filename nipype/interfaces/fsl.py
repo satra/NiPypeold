@@ -27,8 +27,8 @@ from shutil import rmtree # to delete dirs
 from nipype.externals.pynifti import load
 from nipype.utils.filemanip import (fname_presuffix, list_to_filename,
                                     filename_to_list, loadflat)
-from nipype.interfaces.base import (Bunch, CommandLine, Interface,
-                                    load_template, InterfaceResult)
+from nipype.interfaces.base import (Bunch, OptMapCommand, CommandLine, 
+                                    Interface, load_template, InterfaceResult)
 from nipype.utils.docparse import get_doc
 from nipype.utils.misc import container_to_string, is_container
 
@@ -48,8 +48,14 @@ class FSLInfo(object):
 
     I'm also not sure this is the best ordering for the various attributes and
     methods. Please feel free to reorder.'''
-    @property
-    def version(self):
+    __outputtype = 'NIFTI'
+    ftypes = {'NIFTI':'nii',
+          'NIFTI_PAIR':'img',
+          'NIFTI_GZ':'nii.gz',
+          'NIFTI_PAIR_GZ':'img.gz'}
+        
+    @staticmethod
+    def version():
         """Check for fsl version on system
 
         Parameters
@@ -74,14 +80,16 @@ class FSLInfo(object):
         clout = CommandLine('cat %s/etc/fslversion'%(basedir)).run()
         out = clout.runtime.stdout
         return out.strip('\n')
+    
+    @classmethod
+    def outputtypeToExt(cls, outputtype):
+        if outputtype in cls.ftypes.keys():
+            return cls.ftypes[outputtype]
+        else:
+            raise IOError('FSLOUTPUTTYPE %s is not supported' % (outputtype))
 
-    ftypes = {'NIFTI':'nii',
-              'NIFTI_PAIR':'img',
-              'NIFTI_GZ':'nii.gz',
-              'NIFTI_PAIR_GZ':'img.gz',
-              None: 'env variable FSLOUTPUTTYPE not set'}
-
-    def outputtype(self, ftype=None):
+    @classmethod
+    def outputtype(cls, ftype=None):
         """Check and or set the global FSL output file type FSLOUTPUTTYPE
 
         Parameters
@@ -98,34 +106,65 @@ class FSLInfo(object):
             The extension associated with the FSLOUTPUTTYPE
 
         """
-        if ftype is None:
-            # get environment setting
-            fsl_ftype = os.getenv('FSLOUTPUTTYPE','NIFTI_GZ')
-
-        else:
-            # set environment setting - updating environ automatically calls
-            # putenv. Note, docs claim putenv may cause memory leaks on OSX and
-            # FreeBSD :\ I see no workarounds -DJC
-            # os.putenv('FSLOUTPUTTYPE',fsl_ftype)
-            if ftype in self.ftypes.keys():
-                os.environ['FSLOUTPUTTYPE'] = ftype
-            else:
-                raise IOError('FSLOUTPUTTYPE %s is not supported' % (ftype))
-            fsl_ftype = ftype
-
-        # This is inappropriate in a utility function
-        # print 'FSLOUTPUTTYPE = %s (\"%s\")' % (fsl_ftype,
-        #                                        self.ftypes[fsl_ftype] )
-        return fsl_ftype, self.ftypes[fsl_ftype]
-
-    def standard_image(self, img_name):
+        if ftype is not None:
+            if ftype in cls.ftypes.keys():
+                cls.__outputtype = ftype
+        return cls.__outputtype, cls.outputtypeToExt(cls.__outputtype)
+    
+    @staticmethod
+    def standard_image(img_name):
         '''Grab an image from the standard location.
 
         Could be made more fancy to allow for more relocatability'''
         fsldir = os.environ['FSLDIR']
         return os.path.join(fsldir, 'data/standard', img_name)
 
-    def glob(self, fname):
+def fslversion():
+    msg = """fsl.fslversion is no longer available. instead replace with:
+
+             fsl.FSLInfo.version()
+
+             This message will be removed in the next release
+          """
+    raise Exception(msg)
+
+def fsloutputtype(ftype=None):
+    msg = """fsl.fsloutputtype is no longer available. instead replace with:
+
+             fsl.FSLInfo.outputtype(...)
+
+             This message will be removed in the next release
+          """
+    raise Exception(msg)
+
+class FSLCommand(OptMapCommand):
+    '''General support for FSL commands. Every FSL command accepts 'outputtype'
+    input. For example:
+    fsl.ExtractRoi(tmin=42, tsize=1, outputtype='NIFTI')'''
+    
+    def __init__(self, *args, **inputs):
+        super(FSLCommand,self).__init__(**inputs)
+        
+        if 'outputtype' not in inputs or inputs['outputtype'] == None:
+            outputtype, _ = FSLInfo.outputtype()
+        else:
+            outputtype = inputs['outputtype'] 
+        self._outputtype = outputtype
+    
+    def run(self):
+        """Execute the command.
+
+        Returns
+        -------
+        results : InterfaceResult
+            An :class:`nipype.interfaces.base.InterfaceResult` object
+            with a copy of self in `interface`
+
+        """
+        self.environ = {'FSLOUTPUTTYPE':self._outputtype}
+        return super(FSLCommand,self).run()
+    
+    def _glob(self, fname):
         '''Check if, given a filename, FSL actually produced it.
 
         The maing thing we're doing here is adding an appropriate extension
@@ -140,20 +179,20 @@ class FSLInfo(object):
 
         # stripping the filename of extensions that FSL will recognize and
         # substitute
-        for ext in self.ftypes.values():
+        for ext in FSLInfo.ftypes.values():
             if fname.endswith(ext):
                 fname = fname[:-(len(ext)+1)]
                 break
 
-        _, ext = self.outputtype()
+        ext = FSLInfo.outputtypeToExt(self._outputtype)
         files = glob(fname) or glob(fname + '.' + ext)
 
         try:
             return files[0]
         except IndexError:
             return None
-
-    def gen_fname(self, basename, fname=None, cwd=None, suffix='_fsl',
+    
+    def _gen_fname(self, basename, fname=None, cwd=None, suffix='_fsl',
                   check=False, cmd='unknown'):
         '''Define a generic mapping for a single outfile
 
@@ -177,14 +216,14 @@ class FSLInfo(object):
             cwd = os.getcwd()
 
         if fname is None:
-            ftype,ext = self.outputtype()
+            ext = FSLInfo.outputtypeToExt(self._outputtype)
             suffix = '.'.join((suffix,ext))
             fname = fname_presuffix(list_to_filename(basename), suffix=suffix,
                                     use_ext=False, newpath=cwd)
 
         if check:
-            fname = fsl_info.glob(fname)
-            if fname is None:
+            new_fname = self._glob(fname)
+            if new_fname is None:
                 raise IOError('file %s not generated by %s' % (fname, cmd))
 
         # XXX This should ultimately somehow allow for relative paths if cwd is
@@ -192,167 +231,6 @@ class FSLInfo(object):
         # the pipeline code work
         # return os.path.realpath(fname)
         return fname
-
-fsl_info = FSLInfo()
-
-def fslversion():
-    msg = """fsl.fslversion is no longer available. instead replace with:
-
-             fsl.fsl_info.version
-
-             This message will be removed in the next release
-          """
-    raise Exception(msg)
-
-def fsloutputtype(ftype=None):
-    msg = """fsl.fsloutputtype is no longer available. instead replace with:
-
-             fsl.fsl_info.outputtype(...)
-
-             This message will be removed in the next release
-          """
-    raise Exception(msg)
-
-class FSLCommand(CommandLine):
-    '''General support for FSL commands'''
-    opt_map = {}
-
-    @property
-    def cmdline(self):
-        """validates fsl options and generates command line argument"""
-        allargs = self._parse_inputs()
-        allargs.insert(0, self.cmd)
-        return ' '.join(allargs)
-
-    def run(self):
-        """Execute the command.
-
-        Returns
-        -------
-        results : InterfaceResult
-            An :class:`nipype.interfaces.base.InterfaceResult` object
-            with a copy of self in `interface`
-
-        """
-        results = self._runner(cwd=os.getcwd())
-        if results.runtime.returncode == 0:
-            results.outputs = self.aggregate_outputs()
-
-        return results
-
-    def _parse_inputs(self, skip=()):
-        """Parse all inputs and format options using the opt_map format string.
-
-        Any inputs that are assigned (that are not None) are formatted
-        to be added to the command line.
-
-        Parameters
-        ----------
-        skip : tuple or list
-            Inputs to skip in the parsing.  This is for inputs that
-            require special handling, for example input files that
-            often must be at the end of the command line.  Inputs that
-            require special handling like this should be handled in a
-            _parse_inputs method in the subclass.
-
-        Returns
-        -------
-        allargs : list
-            A list of all inputs formatted for the command line.
-
-        """
-        allargs = []
-        inputs = sorted((k, v) for k, v in self.inputs.iteritems()
-                            if v is not None and k not in skip)
-        for opt, value in inputs:
-            if opt == 'args':
-                # XXX Where is this used?  Is self.inputs.args still
-                # used?  Or is it leftover from the original design of
-                # base.CommandLine?
-                allargs.extend(value)
-                continue
-            try:
-                argstr = self.opt_map[opt]
-                if is_container(argstr):
-                    # The value in opt_map may be a tuple whose first
-                    # element is the format string and second element
-                    # a one-line docstring.  This docstring will
-                    # become the desc field in the traited version of
-                    # the code.
-                    argstr = argstr[0]
-                if argstr.find('%') == -1:
-                    # Boolean options have no format string.  Just
-                    # append options if True.
-                    if value is True:
-                        allargs.append(argstr)
-                    elif value is not False:
-                        raise TypeError('Boolean option %s set to %s' %
-                                         (opt, str(value)) )
-                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
-                    # XXX Hack to deal with special case where some
-                    # parameters to Fnirt can have a variable number
-                    # of arguments.  Splitting the argument string,
-                    # like '--infwhm=%d', then add as many format
-                    # strings as there are values to the right-hand
-                    # side.
-                    argparts = argstr.split('=')
-                    allargs.append(argparts[0] + '=' +
-                                   ','.join([argparts[1] % y for y in value]))
-                elif isinstance(value, list):
-                    allargs.append(argstr % tuple(value))
-                else:
-                    # Append options using format string.
-                    allargs.append(argstr % value)
-            except TypeError, err:
-                msg = 'Error when parsing option %s in class %s.\n%s' % \
-                    (opt, self.__class__.__name__, err.message)
-                warn(msg)
-            except KeyError:
-                warn("Option '%s' is not supported!" % (opt))
-                raise
-
-        return allargs
-
-    def _populate_inputs(self):
-        self.inputs = Bunch((k,None) for k in self.opt_map.keys())
-
-    def inputs_help(self):
-        """Print command line documentation for the command."""
-        print get_doc(self.cmd, self.opt_map, '-h')
-
-    def outputs_help(self):
-        """Print the help for outputs."""
-        # XXX This function does the same for FSL and SPM, consider
-        # moving to a top-level class.
-        print self.outputs.__doc__
-
-    def aggregate_outputs(self):
-        """Create a Bunch which contains all possible files generated
-        by running the interface.  Some files are always generated, others
-        depending on which ``inputs`` options are set.
-
-        Returns
-        -------
-        outputs : Bunch object
-            Bunch object containing all possible files generated by
-            interface object.
-
-            If None, file was not generated
-            Else, contains path, filename of generated outputfile
-
-        """
-        raise NotImplementedError(
-                'Subclasses of FSLCommand must implement aggregate_outputs')
-
-    def outputs_help(self):
-        """Print outputs help
-        """
-        print self.outputs.__doc__
-
-    def outputs(self):
-        """Virtual function"""
-        raise NotImplementedError(
-                'Subclasses of FSLCommand must implement outputs')
 
 class TraitedCommand(CommandLine):
     '''Provides machinery for providing input and output specifications
@@ -701,7 +579,6 @@ class Bet(TraitedCommand):
     # def _parse_inputs(self):
     #     """validate fsl bet options"""
     #     allargs = super(Bet, self)._parse_inputs(skip=('infile', 'outfile'))
-
     #     if self.inputs.infile:
     #         infile = list_to_filename(self.inputs.infile)
     #         allargs.insert(0, infile)
@@ -709,7 +586,6 @@ class Bet(TraitedCommand):
     #                                      self.inputs.outfile,
     #                                      suffix='_brain')
     #         allargs.insert(1, outfile)
-
     #     return allargs
 
     def run(self, infile=None, outfile=None, **inputs):
@@ -776,11 +652,11 @@ class Bet(TraitedCommand):
     def aggregate_outputs(self):
         outputs = self.outputs()
         cwd = os.getcwd()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                                 self.inputs.outfile, cwd=cwd, suffix='_brain',
                                 check=True)
         if self.inputs.mask or self.inputs.reduce_bias:
-            outputs.maskfile = fsl_info.gen_fname(outputs.outfile, cwd=cwd,
+            outputs.maskfile = self._gen_fname(outputs.outfile, cwd=cwd,
                                                   suffix='_mask', check=True)
         return outputs
     aggregate_outputs.__doc__ = FSLCommand.aggregate_outputs.__doc__
@@ -1026,7 +902,7 @@ class Fast(FSLCommand):
             If any expected output file is not found.
 
         """
-        _, envext = fsl_info.outputtype()
+        _, envext = FSLInfo.outputtype()
         outputs = self.outputs()
 
         if not is_container(self.inputs.infiles):
@@ -1082,7 +958,7 @@ class Fast(FSLCommand):
 
         # For each output file-type (key), check that any expected
         # files in the output list exist.
-        for outtype, outlist in outputs.iteritems():
+        for outtype, outlist in outputs.items():
             if len(outlist) > 0:
                 for outfile in outlist:
                     if not len(glob(outfile))==1:
@@ -1257,11 +1133,11 @@ class Flirt(FSLCommand):
         cwd = os.getcwd()
         if self.inputs.outfile:
             outputs.outfile = os.path.join(cwd, self.inputs.outfile)
-            if not fsl_info.glob(outputs.outfile):
+            if not self._glob(outputs.outfile):
                 raise_error(outputs.outfile)
         if self.inputs.outmatrix:
             outputs.outmatrix = os.path.join(cwd, self.inputs.outmatrix)
-            if not fsl_info.glob(outputs.outmatrix):
+            if not self._glob(outputs.outmatrix):
                 raise_error(outputs.outmatrix)
         return outputs
 
@@ -1286,7 +1162,7 @@ class ApplyXfm(Flirt):
         '''Call our super-method, then add our input files'''
         allargs = super(ApplyXfm, self)._parse_inputs()
         if not self.inputs.outfile:
-            outfile = fsl_info.gen_fname(self.inputs.infile,
+            outfile = self._gen_fname(self.inputs.infile,
                                          self.inputs.outfile,
                                          suffix='_axfm')
             allargs.append(' '.join(('-out',outfile)))
@@ -1381,7 +1257,7 @@ class ApplyXfm(Flirt):
         """
         outputs = self.outputs()
         # Verify output files exist
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                                              self.inputs.outfile,
                                              suffix='_axfm',
                                              check=True)
@@ -1455,7 +1331,7 @@ class McFlirt(FSLCommand):
         if self.inputs.infile:
             infile = list_to_filename(self.inputs.infile)
             allargs.insert(0,'-in %s'%infile)
-            outfile = fsl_info.gen_fname(infile, self.inputs.outfile,
+            outfile = self._gen_fname(infile, self.inputs.outfile,
                                          suffix='_mcf')
             allargs.append(self.opt_map['outfile'] % outfile)
         
@@ -1522,18 +1398,18 @@ class McFlirt(FSLCommand):
         # We are generating outfile if it's not there already
         # if self.inputs.outfile:
 
-        outputs.outfile = fsl_info.gen_fname(list_to_filename(self.inputs.infile),
+        outputs.outfile = self._gen_fname(list_to_filename(self.inputs.infile),
                 self.inputs.outfile, cwd=cwd, suffix='_mcf', check=True)
 
         # XXX Need to change 'item' below to something that exists
         # outfile? infile?
         # These could be handled similarly to default values for inputs
         if self.inputs.statsimgs:
-            outputs.varianceimg = fsl_info.gen_fname(list_to_filename(self.inputs.infile),
+            outputs.varianceimg = self._gen_fname(list_to_filename(self.inputs.infile),
                 self.inputs.outfile, cwd=cwd, suffix='_variance', check=True)
-            outputs.stdimg = fsl_info.gen_fname(list_to_filename(self.inputs.infile),
+            outputs.stdimg = self._gen_fname(list_to_filename(self.inputs.infile),
                 self.inputs.outfile, cwd=cwd, suffix='_sigma', check=True)
-            outputs.meanimg = fsl_info.gen_fname(list_to_filename(self.inputs.infile),
+            outputs.meanimg = self._gen_fname(list_to_filename(self.inputs.infile),
                 self.inputs.outfile, cwd=cwd, suffix='_meanvol', check=True)
         if self.inputs.savemats:
             matnme, ext = os.path.splitext(list_to_filename(self.inputs.infile))
@@ -1757,10 +1633,10 @@ class Fnirt(FSLCommand):
         if self.inputs.logfile:
             outputs.logfile = self.inputs.logfile
 
-        for item, file in outputs.iteritems():
+        for item, file in outputs.items():
             if file is not None:
                 file = os.path.join(cwd, file)
-                file = fsl_info.glob(file)
+                file = self._glob(file)
                 if file is None:
                     raise IOError('file %s of type %s not generated'%(file,item))
                 setattr(outputs, item, file)
@@ -1835,7 +1711,7 @@ class ApplyWarp(FSLCommand):
 
     def aggregate_outputs(self):
         outputs = self.outputs()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                 self.inputs.outfile, suffix='_warp', check=True)
         return outputs
 
@@ -1858,7 +1734,7 @@ class Smooth(FSLCommand):
 
 
     def _get_outfile(self, check=False):
-        return fsl_info.gen_fname(self.inputs.infile,
+        return self._gen_fname(self.inputs.infile,
                                   self.inputs.outfile,
                                   suffix='_smooth',
                                   check=check)
@@ -1901,7 +1777,7 @@ class Merge(FSLCommand):
               }
 
     def _get_outfile(self, check=False):
-        return fsl_info.gen_fname(self.inputs.infile[0],
+        return self._gen_fname(self.inputs.infile[0],
                                   self.inputs.outfile,
                                   suffix='_merged',
                                   check=check)
@@ -2154,7 +2030,7 @@ class Level1Design(Interface):
         if register:
             reg_image = self.inputs.reg_image
             if not reg_image:
-                reg_image = fsl_info.standard_image('MNI152_T1_2mm_brain.nii.gz')
+                reg_image = FSLInfo.standard_image('MNI152_T1_2mm_brain.nii.gz')
         reg_dof = self.inputs.reg_dof
         for i,info in enumerate(session_info):
             num_evs,cond_txt  = self._create_ev_files(cwd,info,i,usetd,self.inputs.contrasts)
@@ -3143,7 +3019,7 @@ class ExtractRoi(FSLCommand):
         # Add infile and outfile to the args if they are specified
         if self.inputs.infile:
             allargs.insert(0, self.inputs.infile)
-            outfile = fsl_info.gen_fname(self.inputs.infile,
+            outfile = self._gen_fname(self.inputs.infile,
                                          self.inputs.outfile,
                                          suffix='_roi')
             allargs.insert(1, outfile)
@@ -3218,7 +3094,7 @@ class ExtractRoi(FSLCommand):
 
         """
         outputs = self.outputs()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                                 self.inputs.outfile, suffix='_roi', check=True)
         return outputs
 
@@ -3226,13 +3102,14 @@ class ExtractRoi(FSLCommand):
 
 #-------------------------------------------------------------------------------------------------------
 class Split(FSLCommand):
-    """Uses FSL Fslsplit command to split a 4D file into a series of 3D files.
+    """Uses FSL Fslsplit command to separate a volume into images in time, x, y or z dimension.
     """
     opt_map={'outbasename': None, # output basename
              'time': '-t', #separate images in time (default behaviour)
              'xdir': '-x', #separate images in the x direction
              'ydir': '-y', #separate images in the y direction
              'zdir': '-z', #separate images in the z direction
+             'infile': None
              }
 
     @property
@@ -3310,7 +3187,7 @@ class Split(FSLCommand):
 
         """
         outputs = self.outputs()
-        type, ext = fsl_info.outputtype()
+        type, ext = FSLInfo.outputtype()
         outbase = 'vol*.'
         if self.inputs.outbasename:
             outbase = '%s*.'%self.inputs.outbasename
@@ -3435,12 +3312,12 @@ class Bedpostx(FSLCommand):
     """
 
     opt_map = {
-        'fibres':               ('-n %d', 'number of fibres per voxel'),
-        'weight':               ('-w %.2f', 'ARD weight'),
-        'burn_period':          ('-b %d', 'burnin period'),
-        'jumps':                ('-j %d', 'number of jumps'),
-        'sampling':             ('-s %d', 'sampling interval'),
-                                 }
+        'fibres': ('-n %d', 'number of fibres per voxel (opt, )'),
+        'weight': ('-w %.2f', 'ARD weight (opt,)'),
+        'burn_period': ('-b %d', 'burnin period (opt,)'),
+        'jumps': ('-j %d', 'number of jumps (opt,)'),
+        'sampling': ('-s %d', 'sampling interval (opt,)'),
+        }
     @property
     def cmd(self):
         """sets base command, immutable"""
@@ -3790,7 +3667,7 @@ class ImageMaths(FSLCommand):
         suffix = '_maths' # ohinds: build suffix
         if self.inputs.suffix:
             suffix = self.inputs.suffix
-        return fsl_info.gen_fname(self.inputs.infile,
+        return self._gen_fname(self.inputs.infile,
                                   self.inputs.outfile,
                                   suffix=suffix)
     
@@ -4665,7 +4542,7 @@ class Probtrackx(FSLCommand):
         if not noseTest:
             directory=os.path.join(cwd,self.inputs.basename)
             if os.path.isdir(directory):
-                if not probtrackx_datacheck_ok(directory):
+                if not self.__datacheck_ok(directory):
                     raise AttributeError('Not all standardized files found \
                                          in input directory: %s' %directory)
 
@@ -4720,41 +4597,34 @@ class Probtrackx(FSLCommand):
 
         """
         outputs=self.outputs()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.basename,
+        outputs.outfile = self._gen_fname(self.inputs.basename,
                                              fname=self.inputs.outfile,
                                              suffix='_pbx',
                                              check=True)
         return outputs
-
-
-#---------------------------------------------------------------------------------------------------------------
-
-def probtrackx_datacheck_ok(directory):
-
-    """ checks whether the directory given to -s <directory> flag contains
-        the three required standardized files """
-
-    merged_ph = False
-    merged_th = False
-    nodif_brain_mask = False
-
-    f1=fsl_info.glob(os.path.join(directory,'merged_ph*'))
-    if f1 is not None:
-        merged_ph=True
-
-    f2=fsl_info.glob(os.path.join(directory,'merged_th*'))
-    if f2 is not None:
-        merged_th=True
-
-    f3=fsl_info.glob(os.path.join(directory,'nodif_brain_mask*'))
-    if f3 is not None:
-        nodif_brain_mask=True
-
-
-    return (merged_ph and merged_th and nodif_brain_mask)
-
-
-#-------------------------------------------------------------------------------------------------------------------
+    
+    def __datacheck_ok(self,directory):
+        """ checks whether the directory given to -s <directory> flag contains
+            the three required standardized files """
+    
+        merged_ph = False
+        merged_th = False
+        nodif_brain_mask = False
+    
+        f1=self._glob(os.path.join(directory,'merged_ph*'))
+        if f1 is not None:
+            merged_ph=True
+    
+        f2=self._glob(os.path.join(directory,'merged_th*'))
+        if f2 is not None:
+            merged_th=True
+    
+        f3=self._glob(os.path.join(directory,'nodif_brain_mask*'))
+        if f3 is not None:
+            nodif_brain_mask=True
+    
+    
+        return (merged_ph and merged_th and nodif_brain_mask)
 
 class Vecreg(FSLCommand):
     """Use FSL vecreg for registering vector data
@@ -4810,7 +4680,7 @@ class Vecreg(FSLCommand):
         if self.inputs.outfile:
             allargs.insert(1, '-o '+self.inputs.outfile)
         else:
-            outfile = fsl_info.gen_fname(self.inputs.infile,
+            outfile = self._gen_fname(self.inputs.infile,
                                          cwd=self.inputs.cwd,
                                          suffix='_vrg')
             self.inputs.outfile=outfile
@@ -4860,7 +4730,7 @@ class Vecreg(FSLCommand):
 
     def aggregate_outputs(self):
         outputs=self.outputs()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                                              fname=self.inputs.outfile,
                                              cwd=self.inputs.cwd,
                                              suffix='_vrg',
@@ -4946,7 +4816,7 @@ class ProjThresh(FSLCommand):
         outputs.outfile=[]
 
         for files in self.inputs.volumes:
-            outputs.outfile.append(fsl_info.glob(files+'_proj_seg_thr_*'))
+            outputs.outfile.append(self._glob(files+'_proj_seg_thr_*'))
 
         return outputs
     aggregate_outputs.__doc__ = FSLCommand.aggregate_outputs.__doc__
@@ -4984,7 +4854,7 @@ class FindTheBiggest(FSLCommand):
         if self.inputs.outfile:
             allargs.insert(1, self.inputs.outfile)
         else:
-            outfile = fsl_info.gen_fname(self.inputs.infiles,
+            outfile = self._gen_fname(self.inputs.infiles,
                                          fname=self.inputs.outfile,
                                          suffix='_fbg')
             allargs.insert(1, outfile)
@@ -5023,7 +4893,7 @@ class FindTheBiggest(FSLCommand):
 
     def aggregate_outputs(self):
         outputs = self.outputs()
-        outputs.outfile = fsl_info.gen_fname(self.inputs.infile,
+        outputs.outfile = self._gen_fname(self.inputs.infile,
                                              fname=self.inputs.outfile,
                                              suffix='_fbg',
                                              check=True)
