@@ -461,9 +461,8 @@ class TraitedAttr(traits.HasTraits):
                 tspec = self.traits()[trait_name]
                 setattr(self, trait_name, tspec.get_default_value())
 
-    def update(self, **inputs):
-        for k, v in inputs.items():
-            setattr(self, k, v)
+    # XXX This is redundant, need to do a global find-replace and remove this
+    update = traits.HasTraits.set
 
 
 class Bet(TraitedCommand):

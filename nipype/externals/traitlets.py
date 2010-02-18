@@ -545,6 +545,11 @@ class HasTraits(object):
         else:
             return trait.get_metadata(key)
 
+    def set(self, **inputs):
+        for k, v in inputs.items():
+            setattr(self, k, v)
+
+
 #-----------------------------------------------------------------------------
 # Actual TraitTypes implementations/subclasses
 #-----------------------------------------------------------------------------
