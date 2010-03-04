@@ -13,7 +13,7 @@ from nipype.testing import (assert_raises, assert_equal, assert_true,
 from nipype.interfaces.base import (Interface, CommandLine, Bunch,
                                     InterfaceResult)
 from nipype.utils.filemanip import cleandir
-import nipype.pipeline.engine as pe
+import nipype.pipeline.engine2 as pe
 import nipype.pipeline.node_wrapper as nw
 
 

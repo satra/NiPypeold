@@ -11,10 +11,10 @@ import numpy as np
 
 from nipype.utils.filemanip import (copyfiles, fname_presuffix,
                                     filename_to_list, list_to_filename,
-                                    fnames_presuffix)
+                                    fnames_presuffix, save_json,
+                                    FileNotFoundError)
 from nipype.interfaces.base import Bunch, InterfaceResult, CommandLine
 from nipype.interfaces.fsl import FSLCommand
-from nipype.utils.filemanip import save_json, loadflat
 import nipype.pipeline.engine as pe
 
 logger = logging.getLogger('nodewrapper')
@@ -45,11 +45,11 @@ class NodeWrapper(object):
         default=None, which results in the use of mkdtemp
     diskbased : Boolean
         Whether the underlying object requires disk space for
-        operation and storage of output
+        operation and storage of output (default: True)
     overwrite : Boolean
         Whether to overwrite contents of output directory if it
         already exists. If directory exists and hash matches it
-        assumes that process has been executed
+        assumes that process has been executed (default : False)
     name : string
         Name of this node. By default node is named
         modulename.classname. But when the same class is being used
@@ -74,7 +74,7 @@ class NodeWrapper(object):
     """
     def __init__(self, interface=None,
                  iterables={}, iterfield=[],
-                 diskbased=False, base_directory=None,
+                 diskbased=True, base_directory=None,
                  overwrite=False,
                  name=None):
         # interface can only be set at initialization
@@ -97,7 +97,7 @@ class NodeWrapper(object):
             self.overwrite = overwrite
         if name is None:
             cname = interface.__class__.__name__
-            mname = interface.__class__.__module__.split('.')[-1]
+            mname = interface.__class__.__module__.split('.')[2]
             self.name = '.'.join((cname, mname))
         else:
             self.name = name
@@ -272,10 +272,11 @@ class NodeWrapper(object):
         if cwd:
             os.chdir(old_cwd)
             
-    def _run_command(self, execute, cwd):
-        self._copyfiles_to_wd(cwd,execute)
+    def _run_command(self, execute, cwd, copyfiles=True):
+        if copyfiles:
+            self._copyfiles_to_wd(cwd,execute)
         if self.disk_based:
-            resultsfile = os.path.join(cwd,'result.npz')
+            resultsfile = os.path.join(cwd, 'result_%s.npz' % self.id)
         if execute:
             if issubclass(self._interface.__class__,CommandLine):
                 cmd = self._interface.cmdline
@@ -287,7 +288,9 @@ class NodeWrapper(object):
             logger.info('Executing node')
             result = self._interface.run()
             if result.runtime.returncode:
-                logger.error(result.runtime.stderr)
+                logger.error('STDERR:' + result.runtime.stderr)
+                logger.error('STDOUT:' + result.runtime.stdout)
+                self._result = result
                 raise RuntimeError(result.runtime.stderr)
             else:
                 if self.disk_based:
@@ -295,23 +298,14 @@ class NodeWrapper(object):
         else:
             # Likewise, cwd could go in here
             logger.info("Collecting precomputed outputs:")
-            if self.disk_based:
-                if os.path.exists(resultsfile):
-                    result = loadflat(resultsfile,'result')['result']
-                else:
-                    # for backwards compatibility
-                    logger.debug('result.npz not found, aggregating ' \
-                                 'and storing results')
-                    aggouts = self._interface.aggregate_outputs()
-                    result = InterfaceResult(interface=None,
-                                             runtime=None,
-                                             outputs=aggouts)
-                    np.savez(resultsfile,result=result)
-            else:
+            try:
                 aggouts = self._interface.aggregate_outputs()
                 result = InterfaceResult(interface=None,
                                          runtime=None,
                                          outputs=aggouts)
+            except FileNotFoundError:
+                logger.info("Some of the outputs were not found: rerunning node.")
+                result = self._run_command(execute=True, cwd=cwd, copyfiles=False)
         return result
     
     def _copyfiles_to_wd(self, outdir, execute):

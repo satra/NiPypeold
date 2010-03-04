@@ -256,9 +256,9 @@ class InterfaceHelpWriter(object):
             if hasattr(classinst, 'opt_map') and len(classinst.opt_map):
                 # If the class has an opt_map, use that so we can grab
                 # any docstrings from it. Otherwise use the inputs.
-                iterator = classinst.opt_map.iteritems
+                iterator = classinst.opt_map.items
             else:
-                iterator = classinst.inputs.iteritems
+                iterator = classinst.inputs.items
             mandhelpstr = None # mandatory inputs
             opthelpstr = None  # optional inputs
             for i,v in sorted(iterator()):
@@ -286,13 +286,29 @@ class InterfaceHelpWriter(object):
                 helpstr += '\n\t'.join(opthelpstr)
             if helpstr:
                 helpstr += '\n\n'
-            if [i for i,v in classinst.outputs().iteritems()]:
+                
+            if hasattr(classinst, 'out_map') and len(classinst.out_map):
+                # If the class has an opt_map, use that so we can grab
+                # any docstrings from it. Otherwise use the inputs.
+                iterator = classinst.out_map.items
+            else:
+                iterator = classinst.outputs().items
+            outstr = []
+            for i,v in sorted(iterator()):
+                fieldstr =  i
+                if isinstance(v,tuple) and isinstance(v[0], str):
+                    # Handle cases where we've added a docstring to
+                    # the opt_map.  The value is then a tuple where
+                    # the first element is the format string and the
+                    # second element is the docstring.
+                    fieldstr += ' : ' + v[0]
+                outstr += [fieldstr]
+            if outstr:
                 if not helpstr:
                     helpstr = '\nOutputs:: \n\n\t'
                 else:
                     helpstr += '\nOutputs:: \n\n\t'
-                for i,v in sorted(classinst.outputs().iteritems()):
-                    helpstr +=  i + '\n\t'
+                helpstr += '\n\t'.join(outstr)
             if helpstr:
                 ad += '\n' + helpstr + '\n'
 

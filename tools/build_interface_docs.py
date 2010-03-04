@@ -1,17 +1,16 @@
 #!/usr/bin/env python
-"""Script to auto-generate our API docs.
+"""Script to auto-generate interface docs.
 """
 # stdlib imports
 import os
 import sys
 
-# local imports
-from interfacedocgen import InterfaceHelpWriter
-
 #*****************************************************************************
 if __name__ == '__main__':
     nipypepath = os.path.abspath('..')
     sys.path.insert(1,nipypepath)
+    # local imports
+    from interfacedocgen import InterfaceHelpWriter
     package = 'nipype'
     outdir = os.path.join('interfaces','generated')
     docwriter = InterfaceHelpWriter(package)
@@ -34,10 +33,9 @@ if __name__ == '__main__':
                                        '\.pipeline\.s3_node_wrapper$',
                                        ]
     docwriter.class_skip_patterns += ['FSL',
-                                      'spm.\SpecifyModel',
-                                      'SpmInfo',
-                                      'FSCommandLine',
-                                      'SpmMatlab'
+                                      'FS',
+                                      'Spm',
+                                      'Spm',
                                       ]
     docwriter.write_api_docs(outdir)
     docwriter.write_index(outdir, 'gen', relative_to='interfaces')
