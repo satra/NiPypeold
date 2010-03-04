@@ -34,7 +34,10 @@ def test_bet():
 
     better.inputs.frac = 0.50
     # .run() based parameter setting
-    betted = better.run(infile='infile2', outfile='outfile')
+    #betted = better.run(infile='infile2', outfile='outfile')
+    better.inputs.infile = 'infile2'
+    better.inputs.outfile = 'outfile'
+    betted = better.run()
     # Non-existant files, shouldn't finish cleanly
     yield assert_not_equal, betted.runtime.returncode, 0
     yield assert_equal, betted.interface.inputs.infile, 'infile2'
@@ -67,11 +70,17 @@ def test_bet():
             }
     # Currently we don't test -R, -S, -B, -Z, -F, -A or -A2
 
-
+    infile = fsl_name('foo')
+    outfile = fsl_name('foo_brain')
+    outpath = os.path.join(os.getcwd(), outfile)
     # test each of our arguments
     for name, settings in opt_map.items():
         better = fsl.Bet(**{name: settings[1]})
-        yield assert_equal, better.cmdline, ' '.join([better.cmd, settings[0]])
+        # Add mandatory input
+        better.inputs.infile = infile
+        better.inputs.outfile = outpath
+        realcmd = ' '.join([better.cmd, infile, outpath, settings[0]])
+        yield assert_equal, better.cmdline, realcmd
 
 
 # test fast

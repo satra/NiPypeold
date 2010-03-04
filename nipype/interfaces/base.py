@@ -365,7 +365,7 @@ class BaseInterface(Interface):
         if not inkeys and self._mandatory_args:
             for arg in self._mandatory_args:
                 print "Mandatory arg: %s not provided" % arg
-            raise Exception("All inputs have not been provided")
+            raise ValueError("All inputs have not been provided")
         # mandatory check 
         input_missing = False
         for arg in self._mandatory_args:
@@ -373,7 +373,7 @@ class BaseInterface(Interface):
                 print "Mandatory arg: %s not provided" % arg
                 input_missing = True
         if input_missing:
-            raise Exception("All inputs have not been provided")
+            raise ValueError("All inputs have not been provided")
             
     
     def run(self):
@@ -615,7 +615,7 @@ class CommandLine(BaseInterface):
                 else:
                     # Append options using format string.
                     val2append = [argstr % value]
-                if pos:
+                if pos is not None:
                     if pos>=0:
                         preargs[pos] = val2append[0]
                     else:
