@@ -48,9 +48,9 @@ def test_bunch_hash():
     yield assert_equal, newbdict['infile'][0][1], jshash.hexdigest()
     yield assert_equal, newbdict['yat'], True
 
-#test CommandLine
+# NEW_CommandLine
 def test_commandline():
-    cl = nii.CommandLine('echo', args='foo')
+    cl = nii.NEW_CommandLine('echo', args='foo')
     yield assert_equal, cl.inputs.args, 'foo'
     yield assert_equal, cl.cmdline, 'echo foo'
     yield assert_not_equal, cl, cl.run()
@@ -62,37 +62,20 @@ def test_commandline():
     yield assert_equal, clout.interface.cmdline, cl.cmdline
     yield assert_not_equal, clout.interface, cl
 
-"""
-stuff =CommandLine('this is what I want to run')
-
-better = Bet(frac=0.5, input='anotherfile', flags = ['-R', '-k'])
-
-betted = better.run(input='filea', output='ssfilea')
-
-def f(a='', *args, **kwargs):
-    whateve
-
-f(file1, file2, a=Something, b='this')
-
-
-cl = COmmandLine('ls')
-
-d1 = cl.run('/path/to/d1')
-
-d2 = cl.run('/path/to/d2')
-
-d3 = CommandLine().run('ls /path/to/d3')
-or
-d3 = CommandLine('ls /path/to/d3').run()
-or
-d3 = CommandLine('ls').run('/path/to/d3')
-
-
-stuff = CommandLine(flags={'-f':0.5, 'otherthing': 2, '-c':[100,87,92], '-R':None})
-
-stuff = CommandLine('ls',flags=['-R', '--thingy', '100 87 90'])
-
-
-cmd1 = CommandLine('ls -l *')
-cmd2 = CommandLine.update('-a -h').remove('-l')
-"""
+# old CommandLine
+def test_commandline_old():
+    cl = nii.CommandLine('echo', 'foo')
+    yield assert_equal, cl.inputs.args, ['echo', 'foo']
+    yield assert_equal, cl.cmdline, 'echo foo'
+    yield assert_not_equal, cl, cl.run()
+    
+    yield assert_equal, nii.CommandLine('echo foo').cmdline,\
+        nii.CommandLine(args='echo foo').cmdline
+    yield assert_equal, nii.CommandLine('ls','-l').cmdline,\
+        nii.CommandLine('ls -l').cmdline
+    clout = cl.run()
+    yield assert_equal, clout.runtime.returncode, 0
+    yield assert_equal, clout.runtime.stderr,  ''
+    yield assert_equal, clout.runtime.stdout, 'foo\n'
+    yield assert_equal, clout.interface.cmdline, cl.cmdline
+    yield assert_not_equal, clout.interface, cl
