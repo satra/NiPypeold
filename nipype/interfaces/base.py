@@ -452,7 +452,8 @@ class CommandLine(BaseInterface):
 
     """
 
-    in_spec = {'args' : ('additional arguments for the command', True, None, '%s')}
+    in_spec = {'args' : ('additional arguments for the command', True, None, \
+                             '%s')}
 
     def __init__(self, command=None, **inputs):
         super(CommandLine, self).__init__(**inputs)

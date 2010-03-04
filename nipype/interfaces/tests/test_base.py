@@ -50,15 +50,11 @@ def test_bunch_hash():
 
 #test CommandLine
 def test_commandline():
-    cl = nii.CommandLine('echo', 'foo')
-    yield assert_equal, cl.inputs.args, ['echo', 'foo']
+    cl = nii.CommandLine('echo', args='foo')
+    yield assert_equal, cl.inputs.args, 'foo'
     yield assert_equal, cl.cmdline, 'echo foo'
     yield assert_not_equal, cl, cl.run()
     
-    yield assert_equal, nii.CommandLine('echo foo').cmdline,\
-        nii.CommandLine(args='echo foo').cmdline
-    yield assert_equal, nii.CommandLine('ls','-l').cmdline,\
-        nii.CommandLine('ls -l').cmdline
     clout = cl.run()
     yield assert_equal, clout.runtime.returncode, 0
     yield assert_equal, clout.runtime.stderr,  ''
