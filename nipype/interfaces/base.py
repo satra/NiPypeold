@@ -268,6 +268,131 @@ class Interface(object):
         """
         raise NotImplementedError
 
+
+class BaseInterface(Interface):
+    """Basic interface class to merge inputs into a single list
+
+    Parameters
+    ----------
+    
+    in_spec : dict
+        Minimally this is a dictionary of the form
+        in_spec = {'field' : ('one line desc', optional, default)}
+        default is the default value of the field, None if not set or known
+        optional is a boolean flag that indicates whether the input field is optional
+    out_spec : dict
+        Minimally this is a dictionary of the form
+        out_spec = {'field' : 'one line desc'}
+    
+    """
+    
+    def __init__(self, **inputs):
+        self.inputs = Bunch()
+        if self.in_spec:
+            for k,v in self.in_spec.items():
+                if len(v) < 3:
+                    setattr(self.inputs, k, None)
+                else:
+                    setattr(self.inputs, k, v[2])
+        self.inputs.update(inputs)
+        self._mandatory_args = [k for k,v in self.in_spec.items() if not v[1]]
+
+    @classmethod
+    def help(cls):
+        """ Prints class help
+        """
+        cls._inputs_help()
+        print ''
+        cls._outputs_help()
+        
+    @classmethod
+    def _inputs_help(cls):
+        """ Prints the help of inputs
+        """
+        if not self.in_spec:
+            return
+        helpstr = ['Inputs','------']
+        opthelpstr = None
+        manhelpstr = None
+        for k,v in sorted(cls.in_spec.items()):
+            if v[1]:
+                if not opthelpstr:
+                    opthelpstr = ['','Optional:']
+                default = v[2]
+                if not default:
+                    default = 'Unknown'
+                opthelpstr += ['%s: %s (default=%s)' % (k,
+                                                        v[0],
+                                                        default)]
+            else:
+                if not manhelpstr:
+                    manhelpstr = ['','Mandatory:']
+                manhelpstr += ['%s: %s'%(k,v[0])]
+        if manhelpstr:
+            helpstr += manhelpstr
+        if opthelpstr:
+            helpstr += opthelpstr
+        print '\n'.join(helpstr)
+        return helpstr
+        
+    @classmethod
+    def _outputs_help(cls):
+        """ Prints the help of outputs
+        """
+        if not self.out_spec:
+            return
+        helpstr = ['Outputs','-------']
+        for k,v in sorted(cls.out_spec.items()):
+            helpstr += ['%s: %s' % (k, v)]
+        print '\n'.join(helpstr)
+
+    @classmethod
+    def _outputs(cls):
+        """ Returns a bunch containing output fields for the class
+        """
+        outputs = Bunch()
+        if cls.out_spec:
+            for k in cls.out_spec.keys():
+                setattr(outputs, k, None)
+        return outputs
+
+    def _check_mandatory_inputs(self):
+        if not self._mandatory_args:
+            return
+        inkeys = []
+        for key, value in self.inputs.items():
+            if value:
+                inkeys.append(key)
+        if not inkeys and self._mandatory_args:
+            for arg in self._mandatory_args:
+                print "Mandatory arg: %s not provided" % arg
+            raise Exception("All inputs have not been provided")
+        # mandatory check 
+        input_missing = False
+        for arg in self._mandatory_args:
+            if inkeys and arg not in inkeys:
+                print "Mandatory arg: %s not provided" % arg
+                input_missing = True
+        if input_missing:
+            raise Exception("All inputs have not been provided")
+            
+    
+    def run(self):
+        """Execute this module.
+        """
+        self._check_mandatory_inputs()
+        runtime = Bunch(returncode=0,
+                        stdout=None,
+                        stderr=None)
+        outputs=self.aggregate_outputs()
+        return InterfaceResult(deepcopy(self), runtime, outputs=outputs)
+
+    def get_input_info(self):
+        """ Provides information about file inputs to copy or link to cwd.
+            Necessary for pipeline operation
+        """
+        return []    
+
 class CommandLine(Interface):
     """Encapsulate a command-line function along with the arguments and options.
 
