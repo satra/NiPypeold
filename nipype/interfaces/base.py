@@ -268,7 +268,6 @@ class Interface(object):
         """
         raise NotImplementedError
 
-
 class BaseInterface(Interface):
     """Basic interface class to merge inputs into a single list
 
@@ -393,7 +392,7 @@ class BaseInterface(Interface):
         """
         return []    
 
-class CommandLine(Interface):
+class CommandLine(BaseInterface):
     """Encapsulate a command-line function along with the arguments and options.
 
     Provides a convenient mechanism to build a command line with it's
@@ -404,24 +403,22 @@ class CommandLine(Interface):
 
     Parameters
     ----------
-    args : string
-        A string representing the command and it's arguments.
-    inputs : mapping
-        key value pairs that populate a Bunch()
+    in_spec : dict
+        Minimally this is a dictionary of the form
+        in_spec = {'field' : ('one line desc', optional, default,
+                              mapping, position)}
+        default is the default value of the field, None if not set or known
+        optional is a boolean flag that indicates whether the input field is
+        optional. default provides the default value of the field. mapping
+        provides a template for the value, position is an optional input that
+        indicates which place to put that input (0, 1, 2, ...) for inputs
+        immediately following the command or [-1, -2, ...] for inputs after the
+        optional commands.
 
+    out_spec : dict
+        Minimally this is a dictionary of the form
+        out_spec = {'field' : 'one line desc'}
 
-    Attributes
-    ----------
-    args : list
-        The command, it's arguments and options store in a list of strings.
-        ['ls', '-al']
-        These are added to command line string first
-    inputs : Bunch of key,value inputs
-        The only valid key for CommandLine is args
-        Other keys are not recognized in CommandLine, and
-        require parsing in subclasses
-        if there are args=['ls','-al'] 
-        These are added to command line string before simple positional args
     Returns
     -------
     
@@ -441,13 +438,7 @@ class CommandLine(Interface):
 
     You could pass arguments in the following ways and all result in
     the same command.
-    >>> lscmd = CommandLine('ls', '-l', '-t')
-    >>> lscmd.cmdline
-    'ls -l -t'
-    >>> lscmd = CommandLine('ls -l -t') 
-    >>> lscmd.cmdline
-    'ls -l -t'
-    >>> lscmd = CommandLine(args=['ls', '-l', '-t'])
+    >>> lscmd = CommandLine('ls', args='-l -t')
     >>> lscmd.cmdline
     'ls -l -t'
 
@@ -461,70 +452,32 @@ class CommandLine(Interface):
 
     """
 
-    def __init__(self, *args, **inputs):
-        self._populate_inputs()
-        self._update(*args, **inputs)
+    in_spec = {'args' : ('additional arguments for the command', True, None, '%s')}
+
+    def __init__(self, command=None, **inputs):
+        super(CommandLine, self).__init__(**inputs)
         self._environ = {}
+        self._cmd = command
 
-    def _update(self, *args, **inputs):
-        """Update the `self.inputs` Bunch.
+    @property
+    def cmd(self):
+        """sets base command, immutable"""
+        return self._cmd
 
-        Updates the Bunch dictionary `self.inputs` with values from
-        `args` and `inputs`.  Positional arguments in `args` will be
-        appended to self.inputs.args if it exists.  Keyword arguments
-        in `inputs` will be added to the `self.inputs` dictionary.  As
-        with any dictionary, if the key already exists in
-        `self.inputs` the new value will overwrite the previous
-        values.  For example, if inputs['args'] is passed it, it will
-        overwrite the previous value of `self.inputs.args`.
+    @property
+    def cmdline(self):
+        """validates fsl options and generates command line argument"""
+        allargs = self._parse_inputs()
+        allargs.insert(0, self.cmd)
+        return ' '.join(allargs)
 
-        Parameters
-        ----------
-        args : list
-            List of parameters to be assigned to self.inputs.args
-        inputs : dict
-            Dictionary whose items are used to update the self.inputs
-            dictionary.
-
-        Examples
-        --------
-        >>> from nipype.interfaces.base import CommandLine
-        >>> cmd = CommandLine('echo')
-        >>> cmd._update('foo', 'bar', new_input_var='whatever')
-        >>> cmd.inputs
-        Bunch(args=['echo', 'foo', 'bar'], new_input_var='whatever')
-
-        """
-
-        try:
-            # if inputs['args'] exists and is splittable (thus, not a
-            # list), split it.
-            # So if inputs['args'] == 'foo bar
-            # then after this block:
-            # inputs['args'] == ['foo', 'bar']
-            if hasattr(inputs['args'], 'split'):
-                inputs['args']  = inputs['args'].split()
-        except KeyError:
-            pass
-
-        self.inputs.update(inputs)
-
-        if args:
-            # Note: .get() returns None if key doesn't exist
-            if self.inputs.get('args') is not None:
-                self.inputs.args.extend(list(args))
-            else:
-                self.inputs.args = list(args)
-
-    def run(self, cwd=None, *args, **inputs):
+    def run(self, cwd=None, **inputs):
         """Execute the command.
         
         Parameters
         ----------
         cwd : path
             Where do we effectively execute this command? (default: os.getcwd())
-        args : list
-            additional arguments that will be appended to inputs.args
         inputs : mapping
             additional key,value pairs will update inputs
             it will overwrite existing key, value pairs
@@ -535,30 +488,10 @@ class CommandLine(Interface):
             A `Bunch` object with a copy of self in `interface`
         
         """
-        self._update(*args, **inputs) 
-            
-        return self._runner(cwd=cwd)
-
-    def _populate_inputs(self):
-        self.inputs = Bunch(args=None)
-
-    @property
-    def cmdline(self):
-        # This handles args like ['bet', '-f 0.2'] without crashing
-        return ' '.join(self.inputs.args)
-
-    def _runner(self, cwd=None):
-        """Run the command using subprocess.Popen.
-
-        Currently, shell is set to True, i.e., a shell parses the command line
-        
-        Arguments
-        ---------
-        cwd : str
-            default os.getcwd()
-        """
+        self.inputs.update(inputs)
         if cwd is None:
             cwd = os.getcwd()
+        # initialize provenance tracking
         runtime = Bunch(cmdline=self.cmdline, cwd=cwd,
                         stdout = None, stderr = None,
                         returncode = None, duration = None,
@@ -587,45 +520,36 @@ class CommandLine(Interface):
         runtime.duration = time()-t
         runtime.returncode = proc.returncode
 
-        return InterfaceResult(deepcopy(self), runtime)
-
-    def get_input_info(self):
-        """ Provides information about file inputs to copy or link to cwd.
-        
-        Notes
-        -----
-        see `spm.Realign.get_input_info`
-            
-        """
-        return []
-    
-    
-class OptMapCommand(CommandLine):
-    '''Common FreeSurfer and FSL commands support'''
-    opt_map = {}
-
-    @property
-    def cmdline(self):
-        """validates fsl options and generates command line argument"""
-        allargs = self._parse_inputs()
-        allargs.insert(0, self.cmd)
-        return ' '.join(allargs)
-
-    def run(self):
-        """Execute the command.
-
-        Returns
-        -------
-        results : InterfaceResult
-            An :class:`nipype.interfaces.base.InterfaceResult` object
-            with a copy of self in `interface`
-
-        """
-        results = self._runner(cwd=os.getcwd())
+        results = InterfaceResult(deepcopy(self), runtime)
         if results.runtime.returncode == 0:
             results.outputs = self.aggregate_outputs()
-
         return results
+
+    def _gen_outfiles(self, check = False):
+        return self._outputs()
+        
+    def aggregate_outputs(self):
+        return self._gen_outfiles(check = True)
+
+    def _convert_inputs(self, opt, val):
+        """Convert input to appropriate format. Override this function for
+        class specific modifications that do not fall into general format:
+
+        For example fnirt should implement this:
+
+                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
+                    # XXX Hack to deal with special case where some
+                    # parameters to Fnirt can have a variable number
+                    # of arguments.  Splitting the argument string,
+                    # like '--infwhm=%d', then add as many format
+                    # strings as there are values to the right-hand
+                    # side.
+                    argparts = argstr.split('=')
+                    allargs.append(argparts[0] + '=' +
+                                   ','.join([argparts[1] % y for y in value]))
+
+        """
+        return val
 
     def _parse_inputs(self, skip=()):
         """Parse all inputs and format options using the opt_map format string.
@@ -648,48 +572,55 @@ class OptMapCommand(CommandLine):
             A list of all inputs formatted for the command line.
 
         """
+        self._check_mandatory_inputs()
+
         allargs = []
-        inputs = sorted((k, v) for k, v in self.inputs.items()
-                            if v is not None and k not in skip)
+        preargs = {}
+        postargs = {}
+        inputs = []
+        for opt, value in self.inputs.items():
+            if opt not in skip:
+                value = self._convert_inputs(opt, value)
+                if value is not None:
+                    inputs.append((opt, value))
+        inputs = sorted(inputs)
         for opt, value in inputs:
-            if opt == 'args':
-                # XXX Where is this used?  Is self.inputs.args still
-                # used?  Or is it leftover from the original design of
-                # base.CommandLine?
-                allargs.extend(value)
-                continue
             try:
-                argstr = self.opt_map[opt]
-                if is_container(argstr):
-                    # The value in opt_map may be a tuple whose first
-                    # element is the format string and second element
-                    # a one-line docstring.  This docstring will
-                    # become the desc field in the traited version of
-                    # the code.
-                    argstr = argstr[0]
+                argstr = self.in_spec[opt][3]
+                pos = None
+                val2append = None
+                if len(self.in_spec[opt]) == 5:
+                    pos = self.in_spec[opt][4]
                 if argstr.find('%') == -1:
                     # Boolean options have no format string.  Just
                     # append options if True.
                     if value is True:
-                        allargs.append(argstr)
+                        val2append = [argstr]
                     elif value is not False:
                         raise TypeError('Boolean option %s set to %s' %
                                          (opt, str(value)) )
-                elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
-                    # XXX Hack to deal with special case where some
-                    # parameters to Fnirt can have a variable number
-                    # of arguments.  Splitting the argument string,
-                    # like '--infwhm=%d', then add as many format
-                    # strings as there are values to the right-hand
-                    # side.
-                    argparts = argstr.split('=')
-                    allargs.append(argparts[0] + '=' +
-                                   ','.join([argparts[1] % y for y in value]))
+                elif argstr.endswith('...'):
+                    # repeatable option
+                    # --id %d... will expand to
+                    # --id 1 --id 2 --id 3 etc.,.
+                    if not isinstance(value, list):
+                        value = [value]
+                    val2append = []
+                    newargstr = argstr.replace('...','')
+                    for val in value:
+                        val2append.append(newargstr % val)
                 elif isinstance(value, list):
-                    allargs.append(argstr % tuple(value))
+                    val2append = [argstr % tuple(value)]
                 else:
                     # Append options using format string.
-                    allargs.append(argstr % value)
+                    val2append = [argstr % value]
+                if pos:
+                    if pos>=0:
+                        preargs[pos] = val2append[0]
+                    else:
+                        postargs[pos] = val2append[0]
+                else:
+                    allargs.extend(val2append)
             except TypeError, err:
                 msg = 'Error when parsing option %s in class %s.\n%s' % \
                     (opt, self.__class__.__name__, err.message)
@@ -697,42 +628,8 @@ class OptMapCommand(CommandLine):
             except KeyError:
                 warn("Option '%s' is not supported!" % (opt))
                 raise
-
+        for key, value in sorted(preargs.items()):
+            allargs.insert(key, value)
+        for key, value in sorted(postargs.items()):
+            allargs.append(value)
         return allargs
-
-    def _populate_inputs(self):
-        self.inputs = Bunch((k,None) for k in self.opt_map.keys())
-
-    def inputs_help(self):
-        """Print command line documentation for the command."""
-        from nipype.utils.docparse import get_doc
-        print get_doc(self.cmd, self.opt_map, '-h')
-
-    def outputs_help(self):
-        """Print the help for outputs."""
-        # XXX This function does the same for FSL and SPM, consider
-        # moving to a top-level class.
-        print self.outputs.__doc__
-
-    def aggregate_outputs(self):
-        """Create a Bunch which contains all possible files generated
-        by running the interface.  Some files are always generated, others
-        depending on which ``inputs`` options are set.
-
-        Returns
-        -------
-        outputs : Bunch object
-            Bunch object containing all possible files generated by
-            interface object.
-
-            If None, file was not generated
-            Else, contains path, filename of generated outputfile
-
-        """
-        raise NotImplementedError(
-                'Subclasses of OptMapCommand must implement aggregate_outputs')
-
-    def outputs(self):
-        """Virtual function"""
-        raise NotImplementedError(
-                'Subclasses of OptMapCommand must implement outputs')
