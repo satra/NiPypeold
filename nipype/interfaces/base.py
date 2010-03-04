@@ -247,7 +247,10 @@ class Interface(object):
     .__init__()
     """
 
-    def __init__(self, *args, **inputs):
+    in_spec = None
+    out_spec = None
+
+    def __init__(self, **inputs):
         """Initialize command with given args and inputs."""
         raise NotImplementedError
 
@@ -255,21 +258,15 @@ class Interface(object):
         """Execute the command."""
         raise NotImplementedError
 
-    def _runner(self):
-        """Performs the call to execute the command."""
-        raise NotImplementedError
-
-    def _populate_inputs(self):
-        """Initialize the inputs Bunch attributes."""
-        raise NotImplementedError
-
     def aggregate_outputs(self):
-        """Called to populate outputs
-        
-        Currently, search for discussion of this on private e-mails between Dav
-        and Satra (ugh!).  This needs to get in here!"""
+        """Called to populate outputs"""
         raise NotImplementedError
 
+    def get_input_info(self):
+        """ Provides information about file inputs to copy or link to cwd.
+            Necessary for pipeline operation
+        """
+        raise NotImplementedError
 
 class CommandLine(Interface):
     """Encapsulate a command-line function along with the arguments and options.
