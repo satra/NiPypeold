@@ -67,121 +67,60 @@ class Bet(FSLCommand):
         """sets base command, immutable"""
         return 'bet'
 
-    opt_map = {
-        'outline':            '-o',
-        'mask':               '-m',
-        'skull':              '-s',
-        'nooutput':           '-n',
-        'frac':               '-f %.2f',
-        'vertical_gradient':  '-g %.2f',
-        'radius':             '-r %d',  # in mm
-        'center':             '-c %d %d %d',  # in voxels
-        'threshold':          '-t',
-        'mesh':               '-e',
-        'verbose':            '-v',
-        'functional':         '-F',
-        'flags':              '%s',
-        'reduce_bias':        '-B',
-        'infile':             None,
-        'outfile':            None,
+    in_spec = {
+        'outline' : ('generate brain surface outline overlaid onto original ' \
+                         'image', True, None, '-o'),
+        'mask' : ('generate binary brain mask', True, None, '-m'),
+        'skull' : ('generate approximate skull image', True, None, '-s'),
+        'nooutput' : ("don't generate segmented brain image output",
+                     True, None, '-n'),
+        'frac' : ('fractional intensity threshold (0->1)', True, None, \
+                      '-f %.2f'),
+        'vertical_gradient' : ('vertical gradient in fractional intensity ' \
+                                  'threshold (-1->1)', True, None, '-g %.2f'),
+        'radius' : ('head radius (mm)', True, None, '-r %d'),  # in mm
+        'center' : ('centre-of-gravity', True, None, '-c %d %d %d'), # in voxels
+        'threshold' : ('apply thresholding to segmented brain image and mask', \
+                           True, None, '-t'),
+        'mesh' : ('generates brain surface as mesh in .vtk format', True, \
+                      None, '-e'),
+        'verbose' : ('verbose', True, None, '-v'),
+        'functional' : ('apply to 4D FMRI data', True, None, '-F'),
+        'flags' : ('', True, None, '%s'),
+        'reduce_bias' : ('bias field & neck cleanup', True, None, '-B'),
+        'infile' : ('Input file', False, None, '%s', 0),
+        'outfile' : ('Output file', True, None, '%s', 1),
         }
+
     # Currently we don't support -R, -S, -Z,-A or -A2
+    out_spec = {'outfile' : 'path/name of skullstripped file',
+                'maskfile' : 'binary brain mask if generated',
+                'meshfile' : 'vtk mesh of brain surface'}
 
-    def inputs_help(self):
-        """Print command line documentation for Bet."""
-        print get_doc(self.cmd, self.opt_map, trap_error=False)
-
-    def _parse_inputs(self):
-        """validate fsl bet options"""
-        allargs = super(Bet, self)._parse_inputs(skip=('infile', 'outfile'))
-
-        infile = None
-        outfile = None
-        if self.inputs.infile:
-            infile = list_to_filename(self.inputs.infile)
-        if self.inputs.outfile:
-            outfile = list_to_filename(self.inputs.outfile)
-        elif infile is not None:
-            outfile = self._gen_fname(infile,
-                                      self.inputs.outfile,
-                                      suffix='_brain')
-        if infile is not None:
-            allargs.insert(0, infile)
-        if outfile is not None:
-            allargs.insert(1, outfile)
-
-        return allargs
-
-    def run(self, infile=None, outfile=None, **inputs):
-        """Execute the command.
-
-        Parameters
-        ----------
-        infile : string
-            Filename to be skull stripped.
-        outfile : string, optional
-            Filename to save output to. If not specified, the ``infile``
-            filename will be used with a "_brain" suffix.
-        inputs : dict, optional
-            Additional ``inputs`` assignments can be passed in.  See
-            Examples section.
-
-        Returns
-        -------
-        results : InterfaceResult
-            An :class:`nipype.interfaces.base.InterfaceResult` object
-            with a copy of self in `interface`
-
-        Examples
-        --------
-        To pass command line arguments to ``bet`` that are not part of
-        the ``inputs`` attribute, pass them in with the ``flags``
-        input.
-
-        >>> from nipype.interfaces import fsl
-        >>> import os
-        >>> btr = fsl.Bet(infile='foo.nii', outfile='bar.nii', flags='-v')
-        >>> btr.cmdline
-        'bet foo.nii bar.nii -v'
-
-        """
-        if infile:
-            self.inputs.infile = infile
-        if self.inputs.infile is None:
-            raise ValueError('Bet requires an input file')
-        if isinstance(self.inputs.infile, list):
-            raise ValueError('Bet does not support multiple input files')
-        if outfile:
-            self.inputs.outfile = outfile
-        self.inputs.update(**inputs)
-        return super(Bet, self).run()
-
-    def outputs(self):
-        """Returns a :class:`nipype.interfaces.base.Bunch` with outputs
-
-        Parameters
-        ----------
-        outfile : string, file
-            path/name of skullstripped file
-        maskfile : string, file
-            binary brain mask if generated
-
-        """
-
-        outputs = Bunch(outfile=None, maskfile=None)
-        return outputs
-
-    def aggregate_outputs(self):
-        outputs = self.outputs()
-        cwd = os.getcwd()
-        outputs.outfile = self._gen_fname(self.inputs.infile,
-                                self.inputs.outfile, cwd=cwd, suffix='_brain',
-                                check=True)
+    def _gen_outfiles(self, check = False):
+        outputs = self._outputs()
+        outputs.outfile = self.inputs.outfile
+        if not outputs.outfile:
+            outputs.outfile = self._gen_fname(self.inputs.infile,
+                                              suffix = '_brain',
+                                              check = check)
+        if self.inputs.mesh:
+            outputs.meshfile = self._gen_fname(outputs.outfile,
+                                               suffix = '_mesh.vtk',
+                                               change_ext = False,
+                                               check = check)
         if self.inputs.mask or self.inputs.reduce_bias:
-            outputs.maskfile = self._gen_fname(outputs.outfile, cwd=cwd,
-                                                  suffix='_mask', check=True)
+            outputs.maskfile = self._gen_fname(outputs.outfile,
+                                               suffix = '_mask',
+                                               check = check)
         return outputs
-    aggregate_outputs.__doc__ = FSLCommand.aggregate_outputs.__doc__
+
+    def _convert_inputs(self, opt, value):
+        if opt == 'outfile':
+            if not value:
+                outputs = self._gen_outfiles()
+                return outputs.outfile
+        return value
 
 
 class Fast(FSLCommand):
