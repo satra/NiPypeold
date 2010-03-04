@@ -35,10 +35,3 @@ def test_outputtype_to_ext():
 
     yield assert_raises, KeyError, fsl.FSLInfo.outputtype_to_ext, 'JUNK'
 
-def test_FSLCommand():
-    # Most methods in FSLCommand are tested in the subclasses.  Only
-    # testing the one item that is not.
-    cmd = fsl.FSLCommand()
-    cmd.cmd = 'bet' # Set the cmd to something
-    res = cmd.run()
-    yield assert_equal, type(res), InterfaceResult
