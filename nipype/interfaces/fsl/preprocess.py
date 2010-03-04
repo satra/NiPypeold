@@ -13,6 +13,7 @@ from glob import glob
 import warnings
 
 from nipype.interfaces.fsl.base import FSLCommand, FSLInfo
+from nipype.interfaces.fsl.base import NEW_FSLCommand
 from nipype.interfaces.base import Bunch
 from nipype.utils.filemanip import fname_presuffix, list_to_filename
 from nipype.utils.docparse import get_doc
@@ -22,7 +23,7 @@ warn = warnings.warn
 warnings.filterwarnings('always', category=UserWarning)
 
 
-class Bet(FSLCommand):
+class Bet(NEW_FSLCommand):
     """Use FSL BET command for skull stripping.
 
     For complete details, see the `BET Documentation.
