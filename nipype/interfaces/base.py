@@ -14,6 +14,10 @@ from string import Template
 from time import time
 from warnings import warn
 
+# We are shooting for interoperability for now - Traits or Traitlets
+import nipype.externals.traitlets as traits
+# import enthought.traits.api as traits
+
 from nipype.utils.filemanip import md5
 from nipype.utils.misc import is_container
 
@@ -236,7 +240,9 @@ class InterfaceResult(object):
         self.runtime = runtime
         self.outputs = outputs
 
-
+#
+# Original base classes
+#
 class Interface(object):
     """This is the template for Interface objects.
 
@@ -619,3 +625,199 @@ class OptMapCommand(CommandLine):
         """Virtual function"""
         raise NotImplementedError(
                 'Subclasses of OptMapCommand must implement outputs')
+
+#
+# New base classes
+#
+class NEW_Interface(object):
+    """This is the template for Interface objects.
+
+    It provides no functionality.  It defines the necessary attributes
+    and methods all Interface objects should have.
+
+    Everything in inputs should also be a possible (explicit?) argument to
+    .__init__()
+    """
+
+    in_spec = None
+    out_spec = None
+
+    def __init__(self, **inputs):
+        """Initialize command with given args and inputs."""
+        raise NotImplementedError
+
+    def run(self, cwd=None):
+        """Execute the command."""
+        raise NotImplementedError
+
+    def aggregate_outputs(self):
+        """Called to populate outputs"""
+        raise NotImplementedError
+
+    def get_input_info(self):
+        """ Provides information about file inputs to copy or link to cwd.
+            Necessary for pipeline operation
+        """
+        raise NotImplementedError
+
+class NEW_BaseInterface(NEW_Interface):
+
+    def __init__(self, **inputs):
+        self.inputs = self.in_spec(**inputs)
+
+    @classmethod
+    def help(cls):
+        """ Prints class help
+        """
+        obj = cls()
+        obj._inputs_help()
+        print ''
+        #obj._outputs_help()
+    
+    def _inputs_help(self):
+        """ Prints the help of inputs
+        """
+        #if not self.in_spec:
+        #    return
+        helpstr = ['Inputs','------']
+        opthelpstr = None
+        manhelpstr = None
+        for name, trait_spec in sorted(self.inputs.traits().items()):
+            desc = trait_spec.get_metadata('desc')
+            if trait_spec.get_metadata('mandatory'):
+                if not manhelpstr:
+                    manhelpstr = ['','Mandatory:']
+                manhelpstr += [' %s: %s' % (name, desc)]
+            else:
+                if not opthelpstr:
+                    opthelpstr = ['','Optional:']
+                # XXX Need to figure out how to get default values
+                # from trait_spec.  Specifically the defaults we
+                # initialize the attr to, not the "trait default"
+                # which is what get_metadata('default') returns.
+                default = trait_spec.get_metadata('default')
+                if not default:
+                    default = 'Unknown'
+                opthelpstr += [' %s: %s (default=%s)' % (name,
+                                                         desc,
+                                                         default)]
+        if manhelpstr:
+            helpstr += manhelpstr
+        if opthelpstr:
+            helpstr += opthelpstr
+        print '\n'.join(helpstr)
+
+    # @classmethod
+    # def _outputs_help(cls):
+    #     """ Prints the help of outputs
+    #     """
+    #     #if not cls.out_spec:
+    #     #    return
+    #     helpstr = ['Outputs','-------']
+    #     for name, trait_spec in sorted(cls.outputs.traits().items()):
+    #         desc = trait_spec.get_metadata('desc')
+    #         helpstr += ['%s: %s' % (name, desc)]
+    #     print '\n'.join(helpstr)
+                               
+    # @classmethod
+    # def _outputs(cls):
+    #     """ Returns a bunch containing output fields for the class
+    #     """
+    #     outputs = Bunch()
+    #     if cls.out_spec:
+    #         for k in cls.out_spec.keys():
+    #             setattr(outputs, k, None)
+    #     return outputs
+
+
+# XXX Here to test code!
+class TraitedAttr(traits.HasTraits):
+    """Provide a few methods necessary to support the Bunch interface.
+
+    In refactoring to Traits, the self.inputs attrs call some methods
+    of the Bunch class that the Traited classes do not inherit from
+    traits.HasTraits.  We can provide those methods here.
+
+    XXX Reconsider this in the long run, but it seems like the best
+    solution to move forward on the refactoring.
+    """
+
+    # XXX These are common inputs that I believe all CommandLine
+    # objects are suppose to have.  Should we define these here?  As
+    # opposed to in each in_spec.  They would not make sense for
+    # the output_spec, but I don't know if output_spec needs a parent
+    # class like this one.
+    # XXX I think we no longer use a flags attr?
+    #flags = traits.Str(argstr='%s')
+    args = traits.Str(argstr='%s')
+
+    def __init__(self, *args, **kwargs):
+        self._generate_handlers()
+        super(TraitedAttr, self).__init__(*args, **kwargs)
+
+    def __deepcopy__(self, memo):
+        # When I added the dynamic trait notifiers via
+        # on_trait_change, tests errored when the run method was
+        # called.  I would get this error: 'TypeError: instancemethod
+        # expected at least 2 arguments, got 0' and a traceback deep
+        # in the copy module triggered by the
+        # 'InterfaceResult(deepcopy(self), runtime)' line returned
+        # from CommandLine._runner.  To fix this, I create a new
+        # instance of self, then assign all traited attrs with
+        # deepcopied values.
+        id_self = id(self)
+        if id_self in memo:
+            return memo[id_self]
+        # Create new dictionary of trait items with deep copies of elements
+        dup_dict = {}
+        for key in self.traits():
+            dup_dict[key] = deepcopy(getattr(self, key), memo)
+        # create new instance and update with copied values
+        dup = self.__class__()
+        dup.update(**dup_dict)
+        return dup
+
+    def _generate_handlers(self):
+        # Find all traits with the 'xor' metadata and attach an event
+        # handler to them.
+        def has_xor(item):
+            if is_container(item):
+                return item
+        xors = self.trait_names(xor=has_xor)
+        for elem in xors:
+            self.on_trait_change(self._xor_warn, elem)
+
+    def _xor_warn(self, name, old, new):
+        trait_spec = self.traits()[name]
+        if new:
+            xor_names = trait_spec.get_metadata('xor')
+            # for each xor, set to default_value
+            for trait_name in xor_names:
+                if trait_name == name:
+                    # skip ourself
+                    continue
+                tspec = self.traits()[trait_name]
+                setattr(self, trait_name, tspec.get_default_value())
+
+    # XXX This is redundant, need to do a global find-replace and remove this
+    update = traits.HasTraits.set
+
+
+class Foo(NEW_BaseInterface):
+    class in_spec(TraitedAttr):
+        infile = traits.Str(argstr='%s', position=0, mandatory=True)
+        outfile = traits.Str(argstr='%s', position=1, mandatory=True)
+        mask = traits.Bool(argstr='-m')
+        frac = traits.Float(argstr='-f %.2f')
+        # center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
+        #                      maxlen=3, units='voxels')
+        # _xor_inputs = ('functional', 'reduce_bias')
+        # functional = traits.Bool(argstr='-F', xor=_xor_inputs)
+        # reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
+
+    def run(self):
+        print 'Foo.run'
+    def aggregate_outputs(self):
+        print 'Foo.aggregate_outputs'
+    def get_input_info(self):
+        print 'Foo.get_input_info'
