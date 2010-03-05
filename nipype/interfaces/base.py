@@ -670,12 +670,14 @@ class NEW_BaseInterface(NEW_Interface):
     def __init__(self, **inputs):
         self.inputs = Bunch()
         if self.in_spec:
+            # Set default value if one is provided
             for k,v in self.in_spec.items():
                 if len(v) < 3:
                     setattr(self.inputs, k, None)
                 else:
                     setattr(self.inputs, k, v[2])
         self.inputs.update(inputs)
+        # Second element in value tuple flags Optional parameter.
         self._mandatory_args = [k for k,v in self.in_spec.items() if not v[1]]
 
     @classmethod
@@ -690,7 +692,7 @@ class NEW_BaseInterface(NEW_Interface):
     def _inputs_help(cls):
         """ Prints the help of inputs
         """
-        if not self.in_spec:
+        if not cls.in_spec:
             return
         helpstr = ['Inputs','------']
         opthelpstr = None
@@ -714,13 +716,12 @@ class NEW_BaseInterface(NEW_Interface):
         if opthelpstr:
             helpstr += opthelpstr
         print '\n'.join(helpstr)
-        return helpstr
         
     @classmethod
     def _outputs_help(cls):
         """ Prints the help of outputs
         """
-        if not self.out_spec:
+        if not cls.out_spec:
             return
         helpstr = ['Outputs','-------']
         for k,v in sorted(cls.out_spec.items()):
