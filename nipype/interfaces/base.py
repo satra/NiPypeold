@@ -672,8 +672,8 @@ class NEW_BaseInterface(NEW_Interface):
         obj = cls()
         obj._inputs_help()
         print ''
-        #obj._outputs_help()
-    
+        obj._outputs_help()
+
     def _inputs_help(self):
         """ Prints the help of inputs
         """
@@ -707,27 +707,22 @@ class NEW_BaseInterface(NEW_Interface):
             helpstr += opthelpstr
         print '\n'.join(helpstr)
 
-    # @classmethod
-    # def _outputs_help(cls):
-    #     """ Prints the help of outputs
-    #     """
-    #     #if not cls.out_spec:
-    #     #    return
-    #     helpstr = ['Outputs','-------']
-    #     for name, trait_spec in sorted(cls.outputs.traits().items()):
-    #         desc = trait_spec.get_metadata('desc')
-    #         helpstr += ['%s: %s' % (name, desc)]
-    #     print '\n'.join(helpstr)
-                               
-    # @classmethod
-    # def _outputs(cls):
-    #     """ Returns a bunch containing output fields for the class
-    #     """
-    #     outputs = Bunch()
-    #     if cls.out_spec:
-    #         for k in cls.out_spec.keys():
-    #             setattr(outputs, k, None)
-    #     return outputs
+    def _outputs_help(self):
+        """ Prints the help of outputs
+        """
+        #if not self.out_spec:
+        #    return
+        helpstr = ['Outputs','-------']
+        outputs = self._outputs()
+        for name, trait_spec in sorted(outputs.traits().items()):
+            desc = trait_spec.get_metadata('desc')
+            helpstr += ['%s: %s' % (name, desc)]
+        print '\n'.join(helpstr)
+
+    def _outputs(self):
+        """ Returns a bunch containing output fields for the class
+        """
+        return self.out_spec()
 
 
 # XXX Here to test code!
@@ -805,15 +800,30 @@ class TraitedAttr(traits.HasTraits):
 
 class Foo(NEW_BaseInterface):
     class in_spec(TraitedAttr):
-        infile = traits.Str(argstr='%s', position=0, mandatory=True)
-        outfile = traits.Str(argstr='%s', position=1, mandatory=True)
-        mask = traits.Bool(argstr='-m')
-        frac = traits.Float(argstr='-f %.2f')
+        infile = traits.Str(argstr='%s', position=0, mandatory=True,
+                            desc = 'Input file for Bet')
+        outfile = traits.Str(argstr='%s', position=1, mandatory=True,
+                             desc = 'Filename for skull stripped image')
+        mask = traits.Bool(argstr='-m',
+                           desc = 'Create mask image')
+        frac = traits.Float(argstr='-f %.2f',
+                            desc = 'Threshold for fractional intensity')
+        fakey = traits.Bool(argstr = '-fake') # Test for no desc, and
+                                              # minimal metadata
+
         # center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
         #                      maxlen=3, units='voxels')
         # _xor_inputs = ('functional', 'reduce_bias')
         # functional = traits.Bool(argstr='-F', xor=_xor_inputs)
         # reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
+
+    class out_spec(traits.HasTraits):
+        # Note - desc has special meaning in Traits, similar to __doc__
+        outfile = traits.Str(desc = 'Filename for skull stripped image')
+        # Would like to do this:
+        #    desc = Foo.in_spec.outfile.get_metadata('desc'))
+        maskfile = traits.Str(
+                        desc = "Filename of binary brain mask (if generated)")
 
     def run(self):
         print 'Foo.run'
