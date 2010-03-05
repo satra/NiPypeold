@@ -669,6 +669,7 @@ class NEW_BaseInterface(NEW_Interface):
     def help(cls):
         """ Prints class help
         """
+        # XXX Creates new object!  Need to make sure this is cheap.
         obj = cls()
         obj._inputs_help()
         print ''
@@ -713,8 +714,8 @@ class NEW_BaseInterface(NEW_Interface):
         #if not self.out_spec:
         #    return
         helpstr = ['Outputs','-------']
-        outputs = self._outputs()
-        for name, trait_spec in sorted(outputs.traits().items()):
+        out_spec = self.out_spec()
+        for name, trait_spec in sorted(out_spec.traits().items()):
             desc = trait_spec.get_metadata('desc')
             helpstr += ['%s: %s' % (name, desc)]
         print '\n'.join(helpstr)
@@ -722,8 +723,60 @@ class NEW_BaseInterface(NEW_Interface):
     def _outputs(self):
         """ Returns a bunch containing output fields for the class
         """
-        return self.out_spec()
+        outputs = Bunch()
+        out_spec = self.out_spec()
+        for name, trait_spec in sorted(out_spec.traits().items()):
+            setattr(outputs, name, None)
+        return outputs
 
+    def _check_mandatory_inputs(self):
+        for name, trait_spec in sorted(self.inputs.traits().items()):
+            if trait_spec.get_metadata('mandatory'):
+                # mandatory parameters must be set and therefore
+                # should not have the default value.  XXX It seems
+                # possible that a default value would be a valid
+                # 'value'?  Currently most of the required params are
+                # filenames where the default_value is the empty
+                # string, so this may not be an issue.
+                value = getattr(self.inputs, name)
+                if value == trait_spec.get_default_value():
+                    msg = "%s requires a value for input '%s'" % \
+                        (self.__class__.__name__, name)
+                    raise ValueError(msg)
+
+    def run(self):
+        """Execute this module.
+        """
+        # XXX What is the purpose of this method here?
+        self._check_mandatory_inputs()
+        runtime = Bunch(returncode=0,
+                        stdout=None,
+                        stderr=None)
+        outputs = self.aggregate_outputs()
+        return InterfaceResult(deepcopy(self), runtime, outputs = outputs)
+
+    def get_input_info(self):
+        """ Provides information about file inputs to copy or link to cwd.
+            Necessary for pipeline operation
+        """
+        return []
+
+class NEW_CommandLine(NEW_BaseInterface):
+    def __init__(self, command=None, **inputs):
+        super(NEW_CommandLine, self).__init__(**inputs)
+        self._environ = {}
+        self._cmd = command
+
+    @property
+    def cmd(self):
+        """sets base command, immutable"""
+        return self._cmd
+
+    def _gen_outfiles(self, check = False):
+        return self._outputs()
+
+    def aggregate_outputs(self):
+        return self._gen_outfiles(check = True)
 
 # XXX Here to test code!
 class TraitedAttr(traits.HasTraits):
@@ -747,8 +800,15 @@ class TraitedAttr(traits.HasTraits):
     args = traits.Str(argstr='%s')
 
     def __init__(self, *args, **kwargs):
+        # XXX Should we accept args anymore?
         self._generate_handlers()
-        super(TraitedAttr, self).__init__(*args, **kwargs)
+        # NOTE: In python 2.6, object.__init__ no longer accepts input
+        # arguments.  HasTraits does not define an __init__ and
+        # therefore these args were being ignored.
+        #super(TraitedAttr, self).__init__(*args, **kwargs)
+        super(TraitedAttr, self).__init__()
+        for key, val in kwargs.items():
+            setattr(self, key, val)
 
     def __deepcopy__(self, memo):
         # When I added the dynamic trait notifiers via
@@ -797,8 +857,7 @@ class TraitedAttr(traits.HasTraits):
     # XXX This is redundant, need to do a global find-replace and remove this
     update = traits.HasTraits.set
 
-
-class Foo(NEW_BaseInterface):
+class Foo(NEW_CommandLine):
     class in_spec(TraitedAttr):
         infile = traits.Str(argstr='%s', position=0, mandatory=True,
                             desc = 'Input file for Bet')
@@ -825,9 +884,29 @@ class Foo(NEW_BaseInterface):
         maskfile = traits.Str(
                         desc = "Filename of binary brain mask (if generated)")
 
-    def run(self):
-        print 'Foo.run'
-    def aggregate_outputs(self):
-        print 'Foo.aggregate_outputs'
+    # def run(self):
+    #     print 'Foo.run'
+
     def get_input_info(self):
         print 'Foo.get_input_info'
+
+def test_Foo():
+    from nipype.testing import assert_equal, assert_not_equal, assert_raises
+    foo = Foo(infile = '/data/foo.nii')
+    assert_equal(foo.inputs.infile, '/data/foo.nii')
+    foo.help() # print without error?
+    print '\noutputs:'
+    outputs = foo.aggregate_outputs()
+    print outputs
+    assert isinstance(outputs, Bunch)
+    assert hasattr(outputs, 'outfile')
+    assert hasattr(outputs, 'maskfile')
+    # run
+    foo.inputs.outfile = '/tmp/bar.nii'
+    res = foo.run()
+    assert isinstance(res, InterfaceResult)
+    assert isinstance(res.runtime, Bunch)
+
+if __name__ == '__main__':
+    test_Foo()
+
