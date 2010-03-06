@@ -12,8 +12,9 @@ import os
 from glob import glob
 import warnings
 
-from nipype.interfaces.fsl.base import FSLCommand, FSLInfo, CommandLine
-from nipype.interfaces.base import Bunch
+from nipype.interfaces.fsl.base import FSLCommand, FSLInfo
+from nipype.interfaces.fsl.base import NEW_FSLCommand
+from nipype.interfaces.base import Bunch, TraitedAttr
 from nipype.utils.filemanip import fname_presuffix, list_to_filename
 from nipype.utils.docparse import get_doc
 from nipype.utils.misc import container_to_string, is_container
@@ -26,240 +27,7 @@ warn = warnings.warn
 warnings.filterwarnings('always', category=UserWarning)
 
 
-class TraitedCommand(CommandLine):
-    '''Provides machinery for providing input and output specifications
-
-    Currently, we are using traitlets from the ipython project to provide a pure
-    python implementation.
-
-    As much as possible, actual functional logic should be housed in this class,
-    subclasses should primarily specify their inputs, outputs and other
-    command-line relevant properties in a declarative fashion.
-    
-    All valid metadata labels for the input_spec should be documented in the
-    _parse_inputs function, and all legal metadata for the output_spec should be
-    specified in the aggregate_outputs function. This is not necessarily the
-    case right now however.'''
-    @property
-    def cmdline(self):
-        """validates fsl options and generates command line argument"""
-        allargs = self._parse_inputs()
-        allargs.insert(0, self.cmd)
-        return ' '.join(allargs)
-
-    # XXX: I don't think this is necessary in light of output_spec, raise with
-    # group once feature-identical implementation is finished
-    def outputs(self):
-        """Returns a bunch structure with outputs
-
-        Parameters
-        ----------
-        (all default to None and are unset)
-
-            outfile : string,file
-            maskfile : string, file
-        """
-        return self.output_spec()
-
-
-    # XXX: This run method (and the one in FSLCommand) do not have the
-    # same function signature as CommandLine.run.  Is there a reason
-    # for this or is it a mistake?
-    def run(self, cwd=None):
-        """Execute the command.
-
-        Returns
-        -------
-        results : InterfaceResult
-            An :class:`nipype.interfaces.base.InterfaceResult` object
-            with a copy of self in `interface`
-
-        """
-        results = self._runner(cwd=cwd)
-        if results.runtime.returncode == 0:
-            results.outputs = self.aggregate_outputs()
-
-        return results
-
-    def _format_arg(self, trait_spec, value):
-        '''A helper function for _parse_inputs'''
-        argstr = trait_spec.get_metadata('argstr')
-        if isinstance(trait_spec, traits.Bool):
-            if value:
-                # Boolean options have no format string. Just append options
-                # if True.
-                return argstr
-            else:
-                # If we end up here we're trying to add a Boolean to
-                # the arg string but whose value is False.  This
-                # should not happen, something went wrong upstream.
-                # Raise an error.
-                msg = "Object '%s' attempting to format argument " \
-                    "string for attr '%s' with value '%s'."  \
-                    % (self, trait_spec.name, value)
-                raise ValueError(msg)
-        elif isinstance(trait_spec, traits.List):
-            # This is a bit simple-minded at present, and should be
-            # construed as the default. If more sophisticated behavior
-            # is needed, it can be accomplished with metadata (e.g.
-            # format string for list member str'ification, specifying
-            # the separator, etc.)
-
-            # Depending on whether we stick with traitlets, and whether or
-            # not we beef up traitlets.List, we may want to put some
-            # type-checking code here as well
-
-            return argstr % ' '.join(str(elt) for elt in value)
-        else:
-            # Append options using format string.
-            return argstr % value
-
-    def _parse_inputs(self):
-        """Parse all inputs using the ``argstr`` format string in the Trait.
-
-        Any inputs that are assigned (not the default_value) are formatted
-        to be added to the command line.
-
-        Returns
-        -------
-        all_args : list
-            A list of all inputs formatted for the command line.
-
-        """
-        all_args = []
-        initial_args = {}
-        final_args = {}
-
-        for name, trait_spec in sorted(self.inputs.traits().items()):
-            value = getattr(self.inputs, name)
-            if value == trait_spec.get_default_value():
-                # skip attrs that haven't been assigned
-                continue
-            arg = self._format_arg(trait_spec, value)
-            pos = trait_spec.get_metadata('position')
-            if pos is not None:
-                if pos >= 0:
-                    initial_args[pos] = arg
-                else:
-                    final_args[pos] = arg
-            else:
-                all_args.append(arg)
-
-        first_args = [arg for pos, arg in sorted(initial_args.items())]
-        last_args = [arg for pos, arg in sorted(final_args.items())]
-        return first_args + all_args + last_args
-
-    def check_mandatory_inputs(self):
-        for name, trait_spec in sorted(self.inputs.traits().items()):
-            if trait_spec.get_metadata('mandatory'):
-                # mandatory parameters must be set and therefore
-                # should not have the default value.  XXX It seems
-                # possible that a default value would be a valid
-                # 'value'?  Currently most of the required params are
-                # filenames where the default_value is the empty
-                # string, so this may not be an issue.
-                value = getattr(self.inputs, name)
-                if value == trait_spec.get_default_value():
-                    msg = "%s requires a value for input '%s'" % \
-                        (self.__class__.__name__, name)
-                    raise ValueError(msg)
-
-    # XXX - do we really need this as a separate function now?
-    def _populate_inputs(self, **kwargs):
-        self.inputs = self.input_spec(**kwargs)
-
-    def inputs_help(self):
-        """Print command line documentation for the command."""
-        # Should just pass the whole class in, and get_doc should do the right
-        # thing if it's traited or whatnot
-        print get_doc(self.cmd, self.opt_map, '-h')
-
-    def aggregate_outputs(self):
-        raise NotImplementedError(
-                'Subclasses of FSLCommand must implement aggregate_outputs')
-
-    def outputs_help(self):
-        """Print outputs help
-        """
-        print self.outputs.__doc__
-
-    def outputs(self):
-        """Virtual function"""
-        raise NotImplementedError(
-                'Subclasses of FSLCommand must implement outputs')
-
-class TraitedAttr(traits.HasTraits):
-    """Provide a few methods necessary to support the Bunch interface.
-
-    In refactoring to Traits, the self.inputs attrs call some methods
-    of the Bunch class that the Traited classes do not inherit from
-    traits.HasTraits.  We can provide those methods here.
-
-    XXX Reconsider this in the long run, but it seems like the best
-    solution to move forward on the refactoring.
-    """
-
-    # XXX These are common inputs that I believe all CommandLine
-    # objects are suppose to have.  Should we define these here?  As
-    # opposed to in each input_spec.  They would not make sense for
-    # the output_spec, but I don't know if output_spec needs a parent
-    # class like this one.
-    flags = traits.Str(argstr='%s')
-    args = traits.Str(argstr='%s')
-
-    def __init__(self, *args, **kwargs):
-        self._generate_handlers()
-        super(TraitedAttr, self).__init__(*args, **kwargs)
-
-    def __deepcopy__(self, memo):
-        # When I added the dynamic trait notifiers via
-        # on_trait_change, tests errored when the run method was
-        # called.  I would get this error: 'TypeError: instancemethod
-        # expected at least 2 arguments, got 0' and a traceback deep
-        # in the copy module triggered by the
-        # 'InterfaceResult(deepcopy(self), runtime)' line returned
-        # from CommandLine._runner.  To fix this, I create a new
-        # instance of self, then assign all traited attrs with
-        # deepcopied values.
-        id_self = id(self)
-        if id_self in memo:
-            return memo[id_self]
-        # Create new dictionary of trait items with deep copies of elements
-        dup_dict = {}
-        for key in self.traits():
-            dup_dict[key] = deepcopy(getattr(self, key), memo)
-        # create new instance and update with copied values
-        dup = self.__class__()
-        dup.update(**dup_dict)
-        return dup
-
-    def _generate_handlers(self):
-        # Find all traits with the 'xor' metadata and attach an event
-        # handler to them.
-        def has_xor(item):
-            if is_container(item):
-                return item
-        xors = self.trait_names(xor=has_xor)
-        for elem in xors:
-            self.on_trait_change(self._xor_warn, elem)
-
-    def _xor_warn(self, name, old, new):
-        trait_spec = self.traits()[name]
-        if new:
-            xor_names = trait_spec.get_metadata('xor')
-            # for each xor, set to default_value
-            for trait_name in xor_names:
-                if trait_name == name:
-                    # skip ourself
-                    continue
-                tspec = self.traits()[trait_name]
-                setattr(self, trait_name, tspec.get_default_value())
-
-    # XXX This is redundant, need to do a global find-replace and remove this
-    update = traits.HasTraits.set
-
-
-class Bet(TraitedCommand):
+class Bet(NEW_FSLCommand):
     """Use FSL BET command for skull stripping.
 
     For complete details, see the `BET Documentation.
@@ -304,7 +72,7 @@ class Bet(TraitedCommand):
         """sets base command, immutable"""
         return 'bet'
 
-    class input_spec(TraitedAttr):
+    class in_spec(TraitedAttr):
         '''Note: Currently we don't support -R, -S, -Z,-A or -A2'''
         # We use position args here as list indices - so a negative number will
         # put something on the end
@@ -332,127 +100,65 @@ class Bet(TraitedCommand):
         functional = traits.Bool(argstr='-F', xor=_xor_inputs)
         reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
 
+        # We use to access fsl_info.gen_fname, but that no longer
+        # exists... need to figure out how to access this method which
+        # is in the Bet class, not the in_spec class.
+
         # Trait handlers
-        def _infile_changed(self, name, old, new):
-            self.infile = list_to_filename(new)
-            # regenerate outfile 
+        # def _infile_changed(self, name, old, new):
+        #     self.infile = list_to_filename(new)
+        #     # regenerate outfile 
 
-            # XXX This is ugly! Encapsulate into a function if we
-            # decide to keep this!  The default_value for a Str is '',
-            # which will not be caught in the 'if fname is None' in
-            # fsl_info.get_fname.  If it's not caught, it uses the
-            # empty string for the filename and self.outfile invalid.
-            default_value = self.traits()['infile'].get_default_value()
-            if self.outfile == default_value:
-                fname = None
-            else:
-                fname = self.outfile
-            self.outfile = fsl_info.gen_fname(self.infile,
-                                              fname,
-                                              suffix='_brain')
+        #     # XXX This is ugly! Encapsulate into a function if we
+        #     # decide to keep this!  The default_value for a Str is '',
+        #     # which will not be caught in the 'if fname is None' in
+        #     # self._gen_fname.  If it's not caught, it uses the
+        #     # empty string for the filename and self.outfile invalid.
+        #     default_value = self.traits()['infile'].get_default_value()
+        #     if self.outfile == default_value:
+        #         fname = None
+        #     else:
+        #         fname = self.outfile
+        #     self.outfile = self._gen_fname(self.infile,
+        #                                       fname,
+        #                                       suffix='_brain')
 
-        def _outfile_changed(self, name, old, new):
-            # regenerate outfile
-            self.outfile = fsl_info.gen_fname(self.infile,
-                                              new,
-                                              suffix='_brain')
+        # def _outfile_changed(self, name, old, new):
+        #     # regenerate outfile
+        #     self.outfile = self._gen_fname(self.infile,
+        #                                       new,
+        #                                       suffix='_brain')
 
-    class output_spec(traits.HasTraits):
+    class out_spec(traits.HasTraits):
         # Note - desc has special meaning in Traits, similar to __doc__
         outfile = traits.Str(desc="path/name of skullstripped file")
         maskfile = traits.Str(
                         desc="path/name of binary brain mask (if generated)")
-                
 
-    def inputs_help(self):
-        """Print command line documentation for Bet."""
-        print get_doc(self.cmd, self.opt_map, trap_error=False)
-
-    # The TraitedCommand _parse_inputs should be able to handle this stuff...
-    # def _parse_inputs(self):
-    #     """validate fsl bet options"""
-    #     allargs = super(Bet, self)._parse_inputs(skip=('infile', 'outfile'))
-    #     if self.inputs.infile:
-    #         infile = list_to_filename(self.inputs.infile)
-    #         allargs.insert(0, infile)
-    #         outfile = fsl_info.gen_fname(infile,
-    #                                      self.inputs.outfile,
-    #                                      suffix='_brain')
-    #         allargs.insert(1, outfile)
-    #     return allargs
-
-    def run(self, infile=None, outfile=None, **inputs):
-        """Execute the command.
-
-        Parameters
-        ----------
-        infile : string
-            Filename to be skull stripped.
-        outfile : string, optional
-            Filename to save output to. If not specified, the ``infile``
-            filename will be used with a "_brain" suffix.
-        inputs : dict, optional
-            Additional ``inputs`` assignments can be passed in.  See
-            Examples section.
-
-        Returns
-        -------
-        results : InterfaceResult
-            An :class:`nipype.interfaces.base.InterfaceResult` object
-            with a copy of self in `interface`
-
-        Examples
-        --------
-        To pass command line arguments to ``bet`` that are not part of
-        the ``inputs`` attribute, pass them in with the ``flags``
-        input.
-
-        >>> from nipype.interfaces import fsl
-        >>> import os
-        >>> btr = fsl.Bet(infile='foo.nii', outfile='bar.nii', flags='-v')
-        >>> btr.cmdline
-        'bet foo.nii bar.nii -v'
-
-        """
-
-        if infile:
-            self.inputs.infile = infile
-        if outfile:
-            self.inputs.outfile = outfile
-        self.inputs.update(**inputs)
-
-        self.check_mandatory_inputs()
-
-        if isinstance(self.inputs.infile, list):
-            raise ValueError('Bet does not support multiple input files')
-        return super(Bet, self).run()
- 
-    def outputs(self):
-        """Returns a :class:`nipype.interfaces.base.Bunch` with outputs
-
-        Parameters
-        ----------
-        outfile : string, file
-            path/name of skullstripped file
-        maskfile : string, file
-            binary brain mask if generated
-
-        """
-
-        outputs = Bunch(outfile=None, maskfile=None)
-        return outputs
-
-    def aggregate_outputs(self):
-        outputs = self.outputs()
-        cwd = os.getcwd()
-        outputs.outfile = self._gen_fname(self.inputs.infile,
-                                self.inputs.outfile, cwd=cwd, suffix='_brain',
-                                check=True)
+    def _gen_outfiles(self, check = False):
+        outputs = self._outputs()
+        outputs.outfile = self.inputs.outfile
+        if not outputs.outfile:
+            outputs.outfile = self._gen_fname(self.inputs.infile,
+                                              suffix = '_brain',
+                                              check = check)
+        if self.inputs.mesh:
+            outputs.meshfile = self._gen_fname(outputs.outfile,
+                                               suffix = '_mesh.vtk',
+                                               change_ext = False,
+                                               check = check)
         if self.inputs.mask or self.inputs.reduce_bias:
-            outputs.maskfile = self._gen_fname(outputs.outfile, cwd=cwd,
-                                                  suffix='_mask', check=True)
+            outputs.maskfile = self._gen_fname(outputs.outfile,
+                                               suffix = '_mask',
+                                               check = check)
         return outputs
-    aggregate_outputs.__doc__ = FSLCommand.aggregate_outputs.__doc__
+
+    def _convert_inputs(self, opt, value):
+        if opt == 'outfile':
+            if not value:
+                outputs = self._gen_outfiles()
+                return outputs.outfile
+        return value
 
 
 class Fast(FSLCommand):

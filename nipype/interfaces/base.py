@@ -933,7 +933,6 @@ class NEW_CommandLine(NEW_BaseInterface):
         return first_args + all_args + last_args
 
 
-# XXX Here to test code!
 class TraitedAttr(traits.HasTraits):
     """Provide a few methods necessary to support the Bunch interface.
 
@@ -1012,6 +1011,10 @@ class TraitedAttr(traits.HasTraits):
     # XXX This is redundant, need to do a global find-replace and remove this
     update = traits.HasTraits.set
 
+#
+# DEBUG
+# XXX: Simple class to test base classes!
+#
 class Foo(NEW_CommandLine):
     class in_spec(TraitedAttr):
         infile = traits.Str(argstr='%s', position=0, mandatory=True,
@@ -1025,11 +1028,11 @@ class Foo(NEW_CommandLine):
         fakey = traits.Bool(argstr = '-fake') # Test for no desc, and
                                               # minimal metadata
 
-        # center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
-        #                      maxlen=3, units='voxels')
-        # _xor_inputs = ('functional', 'reduce_bias')
-        # functional = traits.Bool(argstr='-F', xor=_xor_inputs)
-        # reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
+        center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
+                             maxlen=3, units='voxels')
+        _xor_inputs = ('functional', 'reduce_bias')
+        functional = traits.Bool(argstr='-F', xor=_xor_inputs)
+        reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
 
     class out_spec(traits.HasTraits):
         # Note - desc has special meaning in Traits, similar to __doc__
