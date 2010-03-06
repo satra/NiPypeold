@@ -765,18 +765,173 @@ class NEW_CommandLine(NEW_BaseInterface):
     def __init__(self, command=None, **inputs):
         super(NEW_CommandLine, self).__init__(**inputs)
         self._environ = {}
-        self._cmd = command
+        self._cmd = command # XXX Currently I don't see any code using
+                            # this feature.  Each class overrides the
+                            # cmd property.  Delete?
 
     @property
     def cmd(self):
         """sets base command, immutable"""
         return self._cmd
 
+    @property
+    def cmdline(self):
+        """validates fsl options and generates command line argument"""
+        allargs = self._parse_inputs()
+        allargs.insert(0, self.cmd)
+        return ' '.join(allargs)
+
+    def run(self, cwd=None, **inputs):
+        """Execute the command.
+
+        Parameters
+        ----------
+        cwd : path
+            Where do we effectively execute this command? (default: os.getcwd())
+        inputs : mapping
+            additional key,value pairs will update inputs
+            it will overwrite existing key, value pairs
+
+        Returns
+        -------
+        results : InterfaceResult Object
+            A `Bunch` object with a copy of self in `interface`
+
+        """
+        #self.inputs.update(inputs)
+        for key, val in inputs.items():
+            setattr(self.inputs, key, val)
+
+        if cwd is None:
+            cwd = os.getcwd()
+        # initialize provenance tracking
+        runtime = Bunch(cmdline=self.cmdline, cwd=cwd,
+                        stdout = None, stderr = None,
+                        returncode = None, duration = None,
+                        environ=deepcopy(os.environ.data),
+                        hostname = gethostname())
+
+        t = time()
+        if hasattr(self, '_environ') and self._environ != None:
+            env = deepcopy(os.environ.data)
+            env.update(self._environ)
+            runtime.environ = env
+            proc  = subprocess.Popen(runtime.cmdline,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     shell=True,
+                                     cwd=cwd,
+                                     env=env)
+        else:
+            proc  = subprocess.Popen(runtime.cmdline,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     shell=True,
+                                     cwd=cwd)
+
+        runtime.stdout, runtime.stderr = proc.communicate()
+        runtime.duration = time()-t
+        runtime.returncode = proc.returncode
+
+        results = InterfaceResult(deepcopy(self), runtime)
+        if results.runtime.returncode == 0:
+            results.outputs = self.aggregate_outputs()
+        return results
+
     def _gen_outfiles(self, check = False):
         return self._outputs()
 
     def aggregate_outputs(self):
         return self._gen_outfiles(check = True)
+
+    def _convert_inputs(self, opt, val):
+        """Convert input to appropriate format. Override this function for
+        class specific modifications that do not fall into general format:
+
+        For example fnirt should implement this:
+
+            elif isinstance(value, list) and self.__class__.__name__ == 'Fnirt':
+                # XXX Hack to deal with special case where some
+                # parameters to Fnirt can have a variable number
+                # of arguments.  Splitting the argument string,
+                # like '--infwhm=%d', then add as many format
+                # strings as there are values to the right-hand
+                # side.
+                argparts = argstr.split('=')
+                allargs.append(argparts[0] + '=' +
+                               ','.join([argparts[1] % y for y in value]))
+
+        """
+        return val
+
+    def _format_arg(self, trait_spec, value):
+        '''A helper function for _parse_inputs'''
+        argstr = trait_spec.get_metadata('argstr')
+        if isinstance(trait_spec, traits.Bool):
+            if value:
+                # Boolean options have no format string. Just append options
+                # if True.
+                return argstr
+            else:
+                # If we end up here we're trying to add a Boolean to
+                # the arg string but whose value is False.  This
+                # should not happen, something went wrong upstream.
+                # Raise an error.
+                msg = "Object '%s' attempting to format argument " \
+                    "string for attr '%s' with value '%s'."  \
+                    % (self, trait_spec.name, value)
+                raise ValueError(msg)
+        elif isinstance(trait_spec, traits.List):
+            # This is a bit simple-minded at present, and should be
+            # construed as the default. If more sophisticated behavior
+            # is needed, it can be accomplished with metadata (e.g.
+            # format string for list member str'ification, specifying
+            # the separator, etc.)
+
+            # Depending on whether we stick with traitlets, and whether or
+            # not we beef up traitlets.List, we may want to put some
+            # type-checking code here as well
+
+            return argstr % ' '.join(str(elt) for elt in value)
+        else:
+            # Append options using format string.
+            return argstr % value
+
+    def _parse_inputs(self):
+        """Parse all inputs using the ``argstr`` format string in the Trait.
+
+        Any inputs that are assigned (not the default_value) are formatted
+        to be added to the command line.
+
+        Returns
+        -------
+        all_args : list
+            A list of all inputs formatted for the command line.
+
+        """
+        all_args = []
+        initial_args = {}
+        final_args = {}
+
+        for name, trait_spec in sorted(self.inputs.traits().items()):
+            value = getattr(self.inputs, name)
+            if value == trait_spec.get_default_value():
+                # skip attrs that haven't been assigned
+                continue
+            arg = self._format_arg(trait_spec, value)
+            pos = trait_spec.get_metadata('position')
+            if pos is not None:
+                if pos >= 0:
+                    initial_args[pos] = arg
+                else:
+                    final_args[pos] = arg
+            else:
+                all_args.append(arg)
+
+        first_args = [arg for pos, arg in sorted(initial_args.items())]
+        last_args = [arg for pos, arg in sorted(final_args.items())]
+        return first_args + all_args + last_args
+
 
 # XXX Here to test code!
 class TraitedAttr(traits.HasTraits):
@@ -884,6 +1039,11 @@ class Foo(NEW_CommandLine):
         maskfile = traits.Str(
                         desc = "Filename of binary brain mask (if generated)")
 
+    @property
+    def cmd(self):
+        """sets base command, immutable"""
+        return 'bet'
+
     # def run(self):
     #     print 'Foo.run'
 
@@ -906,6 +1066,10 @@ def test_Foo():
     res = foo.run()
     assert isinstance(res, InterfaceResult)
     assert isinstance(res.runtime, Bunch)
+    assert_equal(res.runtime.returncode, 1)
+    realcmd = 'bet /data/foo.nii /tmp/bar.nii'
+    assert_equal(foo.cmdline, realcmd)
+    assert_equal(res.runtime.cmdline, realcmd)
 
 if __name__ == '__main__':
     test_Foo()
