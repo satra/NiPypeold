@@ -802,6 +802,7 @@ class NEW_CommandLine(NEW_BaseInterface):
         for key, val in inputs.items():
             setattr(self.inputs, key, val)
 
+        self._check_mandatory_inputs()
         if cwd is None:
             cwd = os.getcwd()
         # initialize provenance tracking

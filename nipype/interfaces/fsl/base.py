@@ -260,7 +260,7 @@ class NEW_FSLCommand(NEW_CommandLine):
             outputtype = inputs['outputtype']
         self._outputtype = outputtype
 
-    def run(self):
+    def run(self, **inputs):
         """Execute the command.
 
         Returns
