@@ -957,8 +957,8 @@ class TraitedAttr(traits.HasTraits):
     # opposed to in each in_spec.  They would not make sense for
     # the output_spec, but I don't know if output_spec needs a parent
     # class like this one.
-    # XXX I think we no longer use a flags attr?
-    #flags = traits.Str(argstr='%s')
+    # XXX flags and args.  Are these both necessary?
+    flags = traits.Str(argstr='%s')
     args = traits.Str(argstr='%s')
 
     def __init__(self, *args, **kwargs):
