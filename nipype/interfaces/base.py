@@ -683,7 +683,7 @@ class NEW_BaseInterface(NEW_Interface):
         helpstr = ['Inputs','------']
         opthelpstr = None
         manhelpstr = None
-        for name, trait_spec in sorted(self.inputs.traits().items()):
+        for name, trait_spec in self.inputs.items():
             desc = trait_spec.get_metadata('desc')
             if trait_spec.get_metadata('mandatory'):
                 if not manhelpstr:
@@ -730,7 +730,7 @@ class NEW_BaseInterface(NEW_Interface):
         return outputs
 
     def _check_mandatory_inputs(self):
-        for name, trait_spec in sorted(self.inputs.traits().items()):
+        for name, trait_spec in self.inputs.items():
             if trait_spec.get_metadata('mandatory'):
                 # mandatory parameters must be set and therefore
                 # should not have the default value.  XXX It seems
@@ -913,7 +913,7 @@ class NEW_CommandLine(NEW_BaseInterface):
         all_args = []
         initial_args = {}
         final_args = {}
-        for name, trait_spec in sorted(self.inputs.traits().items()):
+        for name, trait_spec in self.inputs.items():
             value = getattr(self.inputs, name)
             if value == trait_spec.get_default_value():
                 # For inputs that have the genfile metadata flag, we
@@ -974,7 +974,8 @@ class TraitedAttr(traits.HasTraits):
 
     def __repr__(self):
         outstr = []
-        for name, trait_spec in sorted(self.traits().items()):
+        #for name, trait_spec in sorted(self.traits().items()):
+        for name, trait_spec in self.items():
             value = getattr(self, name)
             outstr.append('%s = %s' % (name, value))
         return '\n'.join(outstr)
@@ -1000,6 +1001,10 @@ class TraitedAttr(traits.HasTraits):
         dup = self.__class__()
         dup.update(**dup_dict)
         return dup
+
+    def items(self):
+        for name, trait_spec in sorted(self.traits().items()):
+            yield name, trait_spec
 
     def _generate_handlers(self):
         # Find all traits with the 'xor' metadata and attach an event
