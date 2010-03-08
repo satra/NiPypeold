@@ -678,8 +678,6 @@ class NEW_BaseInterface(NEW_Interface):
     def _inputs_help(self):
         """ Prints the help of inputs
         """
-        #if not self.in_spec:
-        #    return
         helpstr = ['Inputs','------']
         opthelpstr = None
         manhelpstr = None
@@ -711,8 +709,6 @@ class NEW_BaseInterface(NEW_Interface):
     def _outputs_help(self):
         """ Prints the help of outputs
         """
-        #if not self.out_spec:
-        #    return
         helpstr = ['Outputs','-------']
         out_spec = self.out_spec()
         for name, trait_spec in sorted(out_spec.traits().items()):
