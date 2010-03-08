@@ -972,6 +972,13 @@ class TraitedAttr(traits.HasTraits):
         for key, val in kwargs.items():
             setattr(self, key, val)
 
+    def __repr__(self):
+        outstr = []
+        for name, trait_spec in sorted(self.traits().items()):
+            value = getattr(self, name)
+            outstr.append('%s = %s' % (name, value))
+        return '\n'.join(outstr)
+
     def __deepcopy__(self, memo):
         # When I added the dynamic trait notifiers via
         # on_trait_change, tests errored when the run method was
