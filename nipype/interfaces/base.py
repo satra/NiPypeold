@@ -974,7 +974,6 @@ class TraitedAttr(traits.HasTraits):
 
     def __repr__(self):
         outstr = []
-        #for name, trait_spec in sorted(self.traits().items()):
         for name, trait_spec in self.items():
             value = getattr(self, name)
             outstr.append('%s = %s' % (name, value))
