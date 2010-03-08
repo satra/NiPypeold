@@ -100,35 +100,6 @@ class Bet(NEW_FSLCommand):
         functional = traits.Bool(argstr='-F', xor=_xor_inputs)
         reduce_bias = traits.Bool(argstr='-B', xor=_xor_inputs)
 
-        # We use to access fsl_info.gen_fname, but that no longer
-        # exists... need to figure out how to access this method which
-        # is in the Bet class, not the in_spec class.
-
-        # Trait handlers
-        # def _infile_changed(self, name, old, new):
-        #     self.infile = list_to_filename(new)
-        #     # regenerate outfile 
-
-        #     # XXX This is ugly! Encapsulate into a function if we
-        #     # decide to keep this!  The default_value for a Str is '',
-        #     # which will not be caught in the 'if fname is None' in
-        #     # self._gen_fname.  If it's not caught, it uses the
-        #     # empty string for the filename and self.outfile invalid.
-        #     default_value = self.traits()['infile'].get_default_value()
-        #     if self.outfile == default_value:
-        #         fname = None
-        #     else:
-        #         fname = self.outfile
-        #     self.outfile = self._gen_fname(self.infile,
-        #                                       fname,
-        #                                       suffix='_brain')
-
-        # def _outfile_changed(self, name, old, new):
-        #     # regenerate outfile
-        #     self.outfile = self._gen_fname(self.infile,
-        #                                       new,
-        #                                       suffix='_brain')
-
     class out_spec(traits.HasTraits):
         # Note - desc has special meaning in Traits, similar to __doc__
         outfile = traits.Str(desc="path/name of skullstripped file")
