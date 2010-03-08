@@ -271,7 +271,7 @@ class NEW_FSLCommand(NEW_CommandLine):
 
         """
         self._environ = {'FSLOUTPUTTYPE': self._outputtype}
-        return super(NEW_FSLCommand, self).run()
+        return super(NEW_FSLCommand, self).run(**inputs)
 
     def _glob(self, fname):
         '''Check if, given a filename, FSL actually produced it.
@@ -323,6 +323,11 @@ class NEW_FSLCommand(NEW_CommandLine):
             check if file exists, adding appropriate extension, raise exception
             if it doesn't
         '''
+        if basename == '':
+            msg = 'Unable to generate filename for command %s. ' % self.cmd
+            msg += 'basename is not set!'
+            raise ValueError(msg)
+
         if cwd is None:
             cwd = os.getcwd()
 

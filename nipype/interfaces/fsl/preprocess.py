@@ -79,7 +79,7 @@ class Bet(NEW_FSLCommand):
         # Also, it would be nice to use traits.File types here, but Traitlets
         # doesn't support that (Yet)
         infile = traits.Str(argstr='%s', position=0, mandatory=True)
-        outfile = traits.Str(argstr='%s', position=1, mandatory=True)
+        outfile = traits.Str(argstr='%s', position=1, genfile=True)
         outline = traits.Bool(argstr='-o')
         mask = traits.Bool(argstr='-m')
         skull = traits.Bool(argstr='-s')

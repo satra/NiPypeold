@@ -913,12 +913,19 @@ class NEW_CommandLine(NEW_BaseInterface):
         all_args = []
         initial_args = {}
         final_args = {}
-
         for name, trait_spec in sorted(self.inputs.traits().items()):
             value = getattr(self.inputs, name)
             if value == trait_spec.get_default_value():
-                # skip attrs that haven't been assigned
-                continue
+                # For inputs that have the genfile metadata flag, we
+                # call the _convert_inputs method to get the generated
+                # value.
+                genfile = trait_spec.get_metadata('genfile')
+                if genfile is not None:
+                    gen_val = self._convert_inputs(name, value)
+                    value = gen_val
+                else:
+                    # skip attrs that haven't been assigned
+                    continue
             arg = self._format_arg(trait_spec, value)
             pos = trait_spec.get_metadata('position')
             if pos is not None:
