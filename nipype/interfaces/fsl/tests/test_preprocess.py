@@ -32,14 +32,14 @@ def test_bet():
     realcmd = 'bet %s %s' % (infile, outfile)
     yield assert_equal, better.cmdline, realcmd
 
-    better.inputs.frac = 0.50
+    better.inputs.frac = 0.40
     # .run() based parameter setting
     betted = better.run(infile='infile2', outfile='outfile')
     # Non-existant files, shouldn't finish cleanly
     yield assert_not_equal, betted.runtime.returncode, 0
     yield assert_equal, betted.interface.inputs.infile, 'infile2'
     yield assert_equal, betted.interface.inputs.outfile, 'outfile'
-    yield assert_equal, betted.runtime.cmdline, 'bet infile2 outfile -f 0.50'
+    yield assert_equal, betted.runtime.cmdline, 'bet infile2 outfile -f 0.40'
 
     # Our options and some test values for them
     # Should parallel the opt_map structure in the class for clarity

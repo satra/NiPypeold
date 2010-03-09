@@ -690,16 +690,18 @@ class NEW_BaseInterface(NEW_Interface):
             else:
                 if not opthelpstr:
                     opthelpstr = ['','Optional:']
-                # XXX Need to figure out how to get default values
-                # from trait_spec.  Specifically the defaults we
-                # initialize the attr to, not the "trait default"
-                # which is what get_metadata('default') returns.
-                default = trait_spec.get_metadata('default')
-                if not default:
-                    default = 'Unknown'
-                opthelpstr += [' %s: %s (default=%s)' % (name,
-                                                         desc,
-                                                         default)]
+                # We do not what the "trait default" which is the
+                # default value for that type of trait and what is
+                # returned from get_metadata('default').  We want the
+                # default value from the package, which we set in the
+                # in_spec class definition.
+                default = trait_spec.get_default_value()
+                if default not in [None, '', []]:
+                    opthelpstr += [' %s: %s (default=%s)' % (name,
+                                                             desc,
+                                                             default)]
+                else:
+                    opthelpstr += [' %s: %s' % (name, desc)]
         if manhelpstr:
             helpstr += manhelpstr
         if opthelpstr:

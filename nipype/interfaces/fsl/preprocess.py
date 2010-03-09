@@ -81,11 +81,11 @@ class Bet(NEW_FSLCommand):
         infile = traits.Str(argstr='%s', position=0, mandatory=True)
         outfile = traits.Str(argstr='%s', position=1, genfile=True)
         outline = traits.Bool(argstr='-o')
-        mask = traits.Bool(argstr='-m')
+        mask = traits.Bool(False, argstr='-m')
         skull = traits.Bool(argstr='-s')
         nooutput = traits.Bool(argstr='-n')
-        frac = traits.Float(argstr='-f %.2f')
-        vertical_gradient = traits.Float(argstr='-g %.2f')
+        frac = traits.Float(0.5, argstr='-f %.2f')
+        vertical_gradient = traits.Float(0.0, argstr='-g %.2f')
         radius = traits.Int(argstr='-r %d', units='mm')
         # Note - Traitlets doesn't actually support the 'trait' metadata, so it
         # is just plain ol' metadata. But we use the same 'trait' id here for
@@ -109,7 +109,7 @@ class Bet(NEW_FSLCommand):
     def _gen_outfiles(self, check = False):
         outputs = self._outputs()
         outputs.outfile = self.inputs.outfile
-        if not outputs.outfile:
+        if not outputs.outfile and self.inputs.infile:
             outputs.outfile = self._gen_fname(self.inputs.infile,
                                               suffix = '_brain',
                                               check = check)
