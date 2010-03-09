@@ -78,20 +78,27 @@ class Bet(NEW_FSLCommand):
         # put something on the end
         # Also, it would be nice to use traits.File types here, but Traitlets
         # doesn't support that (Yet)
-        infile = traits.Str(argstr='%s', position=0, mandatory=True)
-        outfile = traits.Str(argstr='%s', position=1, genfile=True)
-        outline = traits.Bool(argstr='-o')
-        mask = traits.Bool(False, argstr='-m')
-        skull = traits.Bool(argstr='-s')
+        infile = traits.Str(desc = 'input file to skull strip',
+                            argstr='%s', position=0, mandatory=True)
+        outfile = traits.Str(desc = 'name of output skull stripped image',
+                             argstr='%s', position=1, genfile=True)
+        outline = traits.Bool(desc = 'create surface outline image',
+                              argstr='-o')
+        mask = traits.Bool(False, desc = 'create binary mask image', 
+                           argstr='-m')
+        skull = traits.Bool(desc = 'create skull image',
+                            argstr='-s')
         nooutput = traits.Bool(argstr='-n')
-        frac = traits.Float(0.5, argstr='-f %.2f')
+        frac = traits.Float(0.5, desc = 'fractional intensity threshold',
+                            argstr='-f %.2f')
         vertical_gradient = traits.Float(0.0, argstr='-g %.2f')
         radius = traits.Int(argstr='-r %d', units='mm')
         # Note - Traitlets doesn't actually support the 'trait' metadata, so it
         # is just plain ol' metadata. But we use the same 'trait' id here for
         # consistency with the Traits API. Likewise for minlen and maxlen.
         # XXX Currently, default_value won't work for a List
-        center = traits.List(argstr='-c %s', trait=traits.Int, minlen=3,
+        center = traits.List(desc = 'center of gravity in voxels',
+                             argstr='-c %s', trait=traits.Int, minlen=3,
                              maxlen=3, units='voxels')
         threshold = traits.Bool(argstr='-t')
         mesh = traits.Bool(argstr='-e')
